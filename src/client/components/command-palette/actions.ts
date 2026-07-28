@@ -1,5 +1,5 @@
 import commandScore from "command-score"
-import type { SidebarProjectGroup } from "../../../shared/types"
+import type { LocalProjectSummary, SidebarProjectGroup } from "../../../shared/types"
 import type { SidebarThread } from "../../lib/thread-sections"
 import {
   listAllSettingsRowDefs,
@@ -53,9 +53,10 @@ export function searchThreadsByTitle(threads: SidebarThread[], query: string, li
   const scored: ScoredThread[] = []
   for (const thread of threads) {
     // Both project names: `projectTitle` is what the project is called,
-    // `projectLabel` is what the row actually shows — so typing a branch you can
-    // see on screen finds the chat.
-    const score = scorePaletteItem(trimmed, thread.title, [thread.projectTitle, thread.projectLabel])
+    // `projectLabel.text` is the flat `repo/branch` — matched in full even
+    // though rows now show the branch as a glyph, so typing a branch still
+    // finds its chats.
+    const score = scorePaletteItem(trimmed, thread.title, [thread.projectTitle, thread.projectLabel.text])
     if (score > 0) {
       scored.push({ ...thread, score })
     }
@@ -128,6 +129,51 @@ export function searchProjects(projects: PaletteProject[], query: string, limit 
       right.score !== left.score
         ? right.score - left.score
         : right.lastActivityAt - left.lastActivityAt
+    ))
+    .slice(0, limit)
+}
+
+export interface ScoredLocalProject {
+  localPath: string
+  title: string
+  score: number
+  /** Recency tiebreaker: last opened, else folder mtime. */
+  sortAt: number
+}
+
+/**
+ * The "All Projects" search group: every project the "/" route lists (saved +
+ * discovered, including ones with no chats yet), minus whatever the
+ * sidebar-backed Projects group already shows. Search-only — this never
+ * renders on the empty-query quick switcher.
+ */
+export function searchLocalProjects(
+  projects: LocalProjectSummary[],
+  query: string,
+  excludePaths: ReadonlySet<string> = new Set(),
+  limit = 6
+): ScoredLocalProject[] {
+  const trimmed = query.trim()
+  if (!trimmed) return []
+
+  const scored: ScoredLocalProject[] = []
+  for (const project of projects) {
+    if (excludePaths.has(project.localPath)) continue
+    const score = scorePaletteItem(trimmed, project.title, [project.localPath])
+    if (score <= 0) continue
+    scored.push({
+      localPath: project.localPath,
+      title: project.title,
+      score,
+      sortAt: project.lastOpenedAt ?? project.folderModifiedAt ?? 0,
+    })
+  }
+
+  return scored
+    .sort((left, right) => (
+      right.score !== left.score
+        ? right.score - left.score
+        : right.sortAt - left.sortAt
     ))
     .slice(0, limit)
 }

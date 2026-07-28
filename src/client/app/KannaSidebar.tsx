@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog"
+import { buildChatJumpLocationState, type ChatJumpRole } from "../lib/chat-navigation"
 import { formatSidebarAgeLabel } from "../lib/formatters"
 import { getSidebarChatTimestamp } from "../lib/sidebarChats"
 import { getThreadDetailLabel } from "../lib/thread-detail-label"
@@ -82,6 +83,8 @@ interface KannaSidebarProps {
   onDeleteChat: (chat: SidebarChatRow) => void
   onCopyPath: (localPath: string) => void
   onOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => void
+  /** Prompts to `git init` a chat's project — the hover card's "Setup Git". */
+  onSetupGit: (chatId: string) => void
   onRenameProject: (projectId: string, sidebarTitle: string | undefined, realTitle: string) => void
   onHideProject: (projectId: string) => void
   onReorderProjectGroups: (projectIds: string[]) => void
@@ -114,6 +117,7 @@ function KannaSidebarImpl({
   onDeleteChat,
   onCopyPath,
   onOpenExternalPath,
+  onSetupGit,
   onRenameProject,
   onHideProject,
   onReorderProjectGroups,
@@ -233,6 +237,14 @@ function KannaSidebarImpl({
     onClose()
   }, [navigate, onClose])
 
+  // Same navigation with a landing spot attached. Always navigates, even to the
+  // chat already open: the pathname wouldn't change, but the request id does,
+  // which is what moves the viewport a second time.
+  const selectChatMessage = useCallback((chatId: string, role: ChatJumpRole) => {
+    navigate(`/chat/${chatId}`, { state: buildChatJumpLocationState(role) })
+    onClose()
+  }, [navigate, onClose])
+
   const renderChatRow = useCallback((chat: SidebarChatRow) => {
     const thread = threadByChatId.get(chat.chatId)
     if (!thread) return null
@@ -254,6 +266,8 @@ function KannaSidebarImpl({
           </Kbd>
         ) : getThreadDetailLabel(thread, "project-scoped", nowMs)}
         onSelect={selectChat}
+        onSelectMessage={selectChatMessage}
+        onSetupGit={onSetupGit}
         onCreateChat={onCreateChat}
         onRenameChat={onRenameChat}
         onShareChat={onShareChat}
@@ -265,7 +279,7 @@ function KannaSidebarImpl({
         onDeleteChat={onDeleteChat}
       />
     )
-  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onRestoreChat, onShareChat, resolvedKeybindings, selectChat, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
+  }, [activeChatId, editorLabel, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onRestoreChat, onSetupGit, onShareChat, resolvedKeybindings, selectChat, selectChatMessage, showNumberJumpHints, threadByChatId, visibleIndexByChatId])
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -697,6 +711,8 @@ function KannaSidebarImpl({
                 editorLabel={editorLabel}
                 nowMs={nowMs}
                 onSelectChat={selectChat}
+                onSelectChatMessage={selectChatMessage}
+                onSetupGit={onSetupGit}
                 onOpenArchivedChat={onOpenArchivedChat}
                 onRestoreChat={onRestoreChat}
                 onCreateChat={onCreateChat}

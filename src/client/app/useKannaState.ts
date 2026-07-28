@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useShallow } from "zustand/react/shallow"
-import { PROVIDERS, withPiFaveModels, type AgentProvider, type AppSettingsPatch, type AskUserQuestionAnswerMap, type AppSettingsSnapshot, type ChatDiffSnapshot, type ChatHistoryPage, type FaveModel, type KeybindingsSnapshot, type LlmProviderSnapshot, type LlmProviderValidationResult, type ModelOptions, type ProviderCatalogEntry, type QueuedChatMessage, type StandaloneTranscriptExportCommandResult, type TranscriptEntry, type UpdateSnapshot } from "../../shared/types"
+import { PROVIDERS, withPiFaveModels, type AgentProvider, type AppSettingsPatch, type AskUserQuestionAnswerMap, type AppSettingsSnapshot, type ChatDiffSnapshot, type FaveModel, type KeybindingsSnapshot, type LlmProviderSnapshot, type LlmProviderValidationResult, type ModelOptions, type ProviderCatalogEntry, type QueuedChatMessage, type StandaloneTranscriptExportCommandResult, type TranscriptEntry, type UpdateSnapshot } from "../../shared/types"
 import { NEW_CHAT_COMPOSER_ID, useChatPreferencesStore } from "../stores/chatPreferencesStore"
 import { useRightSidebarStore } from "../stores/rightSidebarStore"
 import { useTerminalLayoutStore } from "../stores/terminalLayoutStore"
 import { getEditorPresetLabel, useTerminalPreferencesStore } from "../stores/terminalPreferencesStore"
 import { useChatInputStore } from "../stores/chatInputStore"
-import type { ChatSnapshot, LocalProjectsSnapshot, SidebarChatRow, SidebarData } from "../../shared/types"
+import type { BranchActionFailure, BranchActionSuccess, ChatSnapshot, LocalProjectsSnapshot, SidebarChatRow, SidebarData } from "../../shared/types"
 import type { AskUserQuestionItem } from "../components/messages/types"
 import type { OpenLocalLinkTarget } from "../components/messages/shared"
 import { useAppDialog } from "../components/ui/app-dialog"
@@ -16,7 +16,6 @@ import { processTranscriptMessages } from "../lib/parseTranscript"
 import { canCancelStatus, getLatestToolIds, isProcessingStatus } from "./derived"
 import {
   applySidebarProjectOrder,
-  CHAT_HISTORY_PAGE_SIZE,
   getActiveChatSnapshot,
   getNewestRemainingChatId,
   getPreviousPrompt,
@@ -30,11 +29,17 @@ import {
   type StartChatIntent,
 } from "./kannaStateHelpers"
 import {
-  mergeTranscriptEntries,
+  applyIncrementalChatSnapshot,
   sameChatSnapshotCore,
   sameDiffs,
   shouldPreserveExistingProjectDiffs,
 } from "./snapshotEquality"
+import {
+  cachedWindowToMessages,
+  createTranscriptCacheWriter,
+  readCachedWindow,
+  toCachedSpan,
+} from "./chatTranscriptCache"
 import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shared/cloud-api"
 import { KannaSocket, type SocketStatus } from "./socket"
 import { useAppSettingsSync } from "./useAppSettingsSync"
@@ -69,6 +74,9 @@ export {
   type ProjectRequest,
   type StartChatIntent,
 } from "./kannaStateHelpers"
+
+/** Stable identity so an empty transcript does not re-derive rows each render. */
+const EMPTY_TRANSCRIPT_ENTRIES: TranscriptEntry[] = []
 
 function sameOriginWsUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
@@ -158,8 +166,6 @@ export interface KannaState {
   latestToolIds: ReturnType<typeof getLatestToolIds>
   runtime: ChatSnapshot["runtime"] | null
   runtimeStatus: string | null
-  isHistoryLoading: boolean
-  hasOlderHistory: boolean
   availableProviders: ProviderCatalogEntry[]
   isProcessing: boolean
   canCancel: boolean
@@ -174,7 +180,6 @@ export interface KannaState {
   closeSidebar: () => void
   collapseSidebar: () => void
   expandSidebar: () => void
-  loadOlderHistory: () => Promise<void>
   handleCreateChat: (projectId: string) => Promise<void>
   handleForkChat: (chat: SidebarChatRow) => Promise<void>
   handleOpenLocalProject: (localPath: string) => Promise<void>
@@ -202,6 +207,7 @@ export interface KannaState {
   handleOpenArchivedChat: (chatId: string) => Promise<void>
   handleRestoreChat: (chatId: string) => Promise<void>
   handleDeleteChat: (chat: SidebarChatRow) => Promise<void>
+  handleSetupGit: (chatId: string) => Promise<void>
   handleHideProject: (projectId: string) => Promise<void>
   handleReorderProjectGroups: (projectIds: string[]) => Promise<void>
   handleCopyPath: (localPath: string) => Promise<void>
@@ -236,10 +242,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const [optimisticSidebarProjectOrder, setOptimisticSidebarProjectOrder] = useState<string[] | null>(null)
   const [localProjects, setLocalProjects] = useState<LocalProjectsSnapshot | null>(null)
   const [chatSnapshot, setChatSnapshot] = useState<ChatSnapshot | null>(null)
-  const [olderHistoryEntries, setOlderHistoryEntries] = useState<TranscriptEntry[]>([])
-  const [isHistoryLoading, setIsHistoryLoading] = useState(false)
-  const [historyCursor, setHistoryCursor] = useState<string | null>(null)
-  const [hasOlderHistory, setHasOlderHistory] = useState(false)
+  const transcriptCacheWriter = useMemo(() => createTranscriptCacheWriter(), [])
   const [projectDiffSnapshots, setProjectDiffSnapshots] = useState<Record<string, ChatDiffSnapshot | null>>({})
   const [connectionStatus, setConnectionStatus] = useState<SocketStatus>("connecting")
   const [sidebarReady, setSidebarReady] = useState(false)
@@ -329,14 +332,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleValidateLlmProvider,
   } = useAppSettingsSync({ socket, connectionStatus, setCommandError })
 
-  // Declared before the chat subscription so a widened window (an anchor that
-  // predates the default recent page) is available when the subscription runs.
-  const {
-    anchorState: readAnchorState,
-    recentLimit: chatRecentLimit,
-    reportReadAnchor,
-  } = useChatReadAnchor(socket, activeChatId)
-
   useEffect(() => {
     if (!activeChatId) {
       setChatSnapshot(null)
@@ -346,15 +341,57 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
     setChatSnapshot(null)
     setChatReady(false)
-    const unsubscribe = socket.subscribe<ChatSnapshot | null>({ type: "chat", chatId: activeChatId, recentLimit: chatRecentLimit }, (snapshot) => {
-      setChatSnapshot((current) => (sameChatSnapshotCore(current, snapshot) ? current : snapshot))
-      setHistoryCursor(snapshot?.history.olderCursor ?? null)
-      setHasOlderHistory(snapshot?.history.hasOlder ?? false)
+
+    let cancelled = false
+    let unsubscribe: (() => void) | null = null
+    // Base for the first incremental push: the server resumes from the cached
+    // span, so its first body starts where this window ends rather than
+    // repeating it.
+    let base: { messages: TranscriptEntry[]; startIndex: number } | null = null
+
+    function handleSnapshot(snapshot: ChatSnapshot | null) {
+      setChatSnapshot((current) => {
+        // Incremental bodies carry only the entries added since the last push,
+        // so they splice onto the window rather than replacing it.
+        const next = applyIncrementalChatSnapshot(current ?? base, snapshot)
+        if (next === null && snapshot?.incremental) {
+          // Unplaceable body — keep what is on screen rather than render a
+          // transcript with a hole; the next full push repairs it.
+          return current
+        }
+        // The cache only ever seeds the first push; after that the live
+        // snapshot is the base.
+        base = null
+        return sameChatSnapshotCore(current, next) ? current : next
+      })
       setChatReady(true)
       setCommandError(null)
+    }
+
+    // The cache read is a few milliseconds and only gates the subscription, not
+    // the render; a miss subscribes with no span and gets a full window.
+    void readCachedWindow(activeChatId).then((cached) => {
+      if (cancelled) return
+      const span = toCachedSpan(cached)
+      if (cached && span) base = cachedWindowToMessages(cached)
+      // No `recentLimit`: the server sizes the window to reach the stored read
+      // anchor and returns it inline. Passing one here would re-subscribe (and
+      // re-send the whole transcript) once the anchor resolved.
+      unsubscribe = socket.subscribe<ChatSnapshot | null>(
+        { type: "chat", chatId: activeChatId, ...(span ? { cachedSpan: span } : {}) },
+        handleSnapshot
+      )
     })
-    return unsubscribe
-  }, [activeChatId, chatRecentLimit, socket])
+
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+      // A chat closed mid-turn never reaches a settled write, so take what is
+      // pending rather than lose the window.
+      transcriptCacheWriter.flush()
+    }
+  }, [activeChatId, socket, transcriptCacheWriter])
+
 
   useEffect(() => {
     if (selectedProjectId) return
@@ -416,17 +453,18 @@ export function useKannaState(activeChatId: string | null): KannaState {
     })
   }, [activeChatId, socket])
 
-  useEffect(() => {
-    setOlderHistoryEntries([])
-    setIsHistoryLoading(false)
-    setHistoryCursor(null)
-    setHasOlderHistory(false)
-  }, [activeChatId])
-
   const activeChatSnapshot = useMemo(
     () => getActiveChatSnapshot(chatSnapshot, activeChatId),
     [activeChatId, chatSnapshot]
   )
+
+  // Reads the anchor off the snapshot (the server resolves it against the
+  // window it chose) and owns the throttled write-back.
+  const {
+    anchorState: readAnchorState,
+    reportReadAnchor,
+  } = useChatReadAnchor(socket, activeChatId, activeChatSnapshot?.readAnchor, chatReady)
+
   const activeProjectId = useMemo(
     () => activeChatSnapshot?.runtime.projectId
       ?? getProjectIdForChat(sidebarProjectGroups, activeChatId)
@@ -474,10 +512,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
     return unsubscribe
   }, [activeProjectId, socket])
-  const serverTranscriptEntries = useMemo(
-    () => mergeTranscriptEntries(olderHistoryEntries, activeChatSnapshot?.messages ?? []),
-    [activeChatSnapshot?.messages, olderHistoryEntries]
-  )
+  const serverTranscriptEntries = activeChatSnapshot?.messages ?? EMPTY_TRANSCRIPT_ENTRIES
   const optimisticScopeId = activeChatId ?? NEW_CHAT_OPTIMISTIC_SCOPE
   const optimisticTranscriptEntries = useMemo(
     () => optimisticUserPrompts
@@ -506,6 +541,14 @@ export function useKannaState(activeChatId: string | null): KannaState {
   )
   const availableProviders = activeChatSnapshot?.availableProviders ?? fallbackProviders
   const isProcessing = isProcessingStatus(effectiveRuntimeStatus ?? undefined)
+
+  // Written after a turn settles, not during: the window changes many times a
+  // second while streaming and the server is the source of truth throughout.
+  useEffect(() => {
+    if (!activeChatId || !chatSnapshot) return
+    transcriptCacheWriter.schedule(activeChatId, chatSnapshot, isProcessing)
+  }, [activeChatId, chatSnapshot, isProcessing, transcriptCacheWriter])
+
   const canCancel = canCancelStatus(effectiveRuntimeStatus ?? undefined)
   const isDraining = runtime?.isDraining ?? false
   const fallbackLocalProjectPath = localProjects?.projects[0]?.localPath ?? null
@@ -555,31 +598,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
       return reconciled
     })
   }, [optimisticScopeId, serverTranscriptEntries])
-
-  const loadOlderHistory = useCallback(async () => {
-    if (!activeChatId || !historyCursor || isHistoryLoading || !hasOlderHistory) {
-      return
-    }
-
-    setIsHistoryLoading(true)
-    try {
-      const page = await socket.command<ChatHistoryPage>({
-        type: "chat.loadHistory",
-        chatId: activeChatId,
-        beforeCursor: historyCursor,
-        limit: CHAT_HISTORY_PAGE_SIZE,
-      })
-      setOlderHistoryEntries((current) => mergeTranscriptEntries(page.messages, current))
-      setHistoryCursor(page.olderCursor)
-      setHasOlderHistory(page.hasOlder)
-      setCommandError(null)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setCommandError(message)
-    } finally {
-      setIsHistoryLoading(false)
-    }
-  }, [activeChatId, hasOlderHistory, historyCursor, isHistoryLoading, socket])
 
   const createChatForProject = useCallback(async (projectId: string) => {
     const chatPreferences = useChatPreferencesStore.getState()
@@ -757,6 +775,46 @@ export function useKannaState(activeChatId: string | null): KannaState {
     }
   }, [socket])
 
+  /**
+   * "Setup Git" from a sidebar hover card: the same confirm-then-`git init` the
+   * chat navbar's branch slot runs, for a chat that isn't necessarily the one
+   * you have open. The server resolves the project from the chat, and
+   * `chat.initGit` is a no-op success on a folder that turns out to already be
+   * a repo — so a stale snapshot costs nothing.
+   *
+   * Unlike the navbar's copy this doesn't open the git panel afterwards: you
+   * were pointing at a row in the sidebar, not asking to go anywhere.
+   */
+  const handleSetupGit = useCallback(async (chatId: string) => {
+    const confirmed = await dialog.confirm({
+      title: "Initialize Git?",
+      description: "Initialize a local git repository in this project?",
+      confirmLabel: "Init Git",
+      cancelLabel: "Cancel",
+    })
+    if (!confirmed) return
+
+    try {
+      const result = await socket.command<BranchActionSuccess | BranchActionFailure>({
+        type: "chat.initGit",
+        chatId,
+      })
+      if (!result.ok) {
+        await dialog.alert({
+          title: result.title,
+          description: `${result.message}${result.detail ? `\n\n${result.detail}` : ""}`,
+          closeLabel: "OK",
+        })
+      }
+    } catch (error) {
+      await dialog.alert({
+        title: "Initialize git failed",
+        description: error instanceof Error ? error.message : String(error),
+        closeLabel: "OK",
+      })
+    }
+  }, [dialog, socket])
+
   const handleHideProject = useCallback(async (projectId: string) => {
     try {
       await socket.command({ type: "project.remove", projectId })
@@ -860,8 +918,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     latestToolIds,
     runtime,
     runtimeStatus: effectiveRuntimeStatus,
-    isHistoryLoading,
-    hasOlderHistory,
     availableProviders,
     isProcessing,
     canCancel,
@@ -876,7 +932,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     closeSidebar,
     collapseSidebar,
     expandSidebar,
-    loadOlderHistory,
     handleCreateChat,
     handleForkChat,
     handleOpenLocalProject,
@@ -904,6 +959,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleOpenArchivedChat,
     handleRestoreChat,
     handleDeleteChat,
+    handleSetupGit,
     handleHideProject,
     handleReorderProjectGroups,
     handleCopyPath,

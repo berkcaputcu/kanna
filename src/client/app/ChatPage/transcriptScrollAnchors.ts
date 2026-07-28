@@ -1,4 +1,5 @@
 import type { ResolvedChatReadAnchor } from "../../../shared/types"
+import type { ChatJumpRole } from "../../lib/chat-navigation"
 import type { ResolvedTranscriptRow } from "../KannaTranscript"
 import { getUserPromptSignature } from "../kannaStateHelpers"
 
@@ -60,6 +61,8 @@ export interface LatestUserPrompt {
   /** Content signature, used to recognise an optimistic prompt across reconciliation. */
   signature: string
   rowIndex: number
+  /** `ResolvedTranscriptRow.id` — the scroll target for pinning this prompt. */
+  rowId: string
 }
 
 export function getLatestUserPrompt(rows: ResolvedTranscriptRow[]): LatestUserPrompt | null {
@@ -71,6 +74,7 @@ export function getLatestUserPrompt(rows: ResolvedTranscriptRow[]): LatestUserPr
     messageId: row.message.id,
     signature: getUserPromptSignature(row.message.content, row.message.attachments ?? []),
     rowIndex,
+    rowId: row.id,
   }
 }
 
@@ -102,7 +106,65 @@ export function shouldPinForNewPrompt(
 
 export type TranscriptScrollTarget =
   | { kind: "end" }
-  | { kind: "pin"; index: number }
+  /**
+   * `rowId` is a `ResolvedTranscriptRow.id` — what the scroller addresses rows
+   * by.
+   *
+   * `offsetFromMessage` moves the landing point relative to the row's top,
+   * measured downward. Positive puts the reader back where they were *inside* a
+   * message (a restored anchor, and only when the column is the same width it
+   * was recorded at). Negative leaves a gap above it, which is what an explicit
+   * jump wants — see `JUMP_LEAD_IN_RATIO`.
+   */
+  | { kind: "pin"; rowId: string; offsetFromMessage?: number }
+
+/** Index of the row rendering the most recent assistant message, or null. */
+export function findLatestAssistantTextRowIndex(rows: ResolvedTranscriptRow[]): number | null {
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index]
+    if (row?.kind === "single" && row.message.kind === "assistant_text") {
+      return index
+    }
+  }
+  return null
+}
+
+/**
+ * A request to land on one end of the last exchange, made from outside the
+ * transcript — today, clicking a message in the sidebar's chat hover card.
+ *
+ * Carries a `requestId` because the role alone can't say "again": clicking the
+ * same preview twice, or clicking back into a chat you already jumped into,
+ * has to move the viewport a second time. The id is what the viewport marks as
+ * spent, so a request survives exactly one landing.
+ */
+export interface TranscriptJumpRequest {
+  role: ChatJumpRole
+  requestId: string
+}
+
+/**
+ * Where a jump request should land, or null when the transcript has no such
+ * message.
+ *
+ * The sidebar names a role and this resolves it, for the same reason the
+ * minimap slices its own turns out of these rows: the transcript is the only
+ * thing that knows which message is which. A card built from a snapshot string
+ * would have to be told, and would then be wrong the moment the chat moved on.
+ *
+ * Returns a *row*, not a message: the scroller addresses rows, and a message
+ * swept into a tool group is reachable only by its group's id.
+ */
+export function resolveJumpTarget(
+  rows: ResolvedTranscriptRow[],
+  role: ChatJumpRole,
+): TranscriptScrollTarget | null {
+  const index = role === "prompt"
+    ? findLatestUserPromptRowIndex(rows)
+    : findLatestAssistantTextRowIndex(rows)
+  const rowId = index === null ? undefined : rows[index]?.id
+  return rowId === undefined ? null : { kind: "pin", rowId }
+}
 
 /**
  * Decide where a freshly opened chat should land.
@@ -115,18 +177,32 @@ export function resolveRestoreTarget(
   rows: ResolvedTranscriptRow[],
   anchor: ResolvedChatReadAnchor | null,
   rowIndexByMessageId: Map<string, number>,
+  transcriptWidth?: number,
 ): TranscriptScrollTarget {
   if (rows.length === 0) return { kind: "end" }
   if (anchor?.atEnd) return { kind: "end" }
 
   if (anchor) {
     const index = rowIndexByMessageId.get(anchor.messageId)
-    if (index !== undefined) return { kind: "pin", index }
-    // Anchor sits outside the loaded window, or its message is gone.
+    // Absent when the anchored message is gone from the transcript.
+    const rowId = index === undefined ? undefined : rows[index]?.id
+    if (rowId !== undefined) {
+      // The offset says how far into the message the reader was, which only
+      // holds if the message wraps the same way it did then. At a different
+      // column width the message is a different shape, so the best we can
+      // honestly do is put its top back at the top.
+      const sameWidth = anchor.transcriptWidth !== undefined
+        && transcriptWidth !== undefined
+        && Math.abs(anchor.transcriptWidth - transcriptWidth) < 1
+      return sameWidth && anchor.offsetFromMessage !== undefined
+        ? { kind: "pin", rowId, offsetFromMessage: anchor.offsetFromMessage }
+        : { kind: "pin", rowId }
+    }
   }
 
   const latestPromptIndex = findLatestUserPromptRowIndex(rows)
-  if (latestPromptIndex !== null) return { kind: "pin", index: latestPromptIndex }
+  const latestPromptRowId = latestPromptIndex === null ? undefined : rows[latestPromptIndex]?.id
+  if (latestPromptRowId !== undefined) return { kind: "pin", rowId: latestPromptRowId }
 
   return { kind: "end" }
 }

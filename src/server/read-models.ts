@@ -88,6 +88,12 @@ export function deriveSidebarData(
     workingTrees?: ReadonlyMap<string, WorkingTreeProbe>
     /** Per-project repo/branch identity, from `WorktreeProbe.getRepoLabels()`. */
     repoLabels?: ReadonlyMap<string, ProjectRepoLabel>
+    /**
+     * Projects known not to be in a repo, from
+     * `WorktreeProbe.getProjectsWithoutRepo()`. Distinct from "no repo label"
+     * — see `SidebarProjectGroup.hasGitRepo`.
+     */
+    projectsWithoutRepo?: ReadonlySet<string>
   }
 ): SidebarData {
   const nowMs = options?.nowMs ?? Date.now()
@@ -125,16 +131,20 @@ export function deriveSidebarData(
 
   function toSidebarChatRows(project: NonNullable<typeof projects[number]>, projectChats: ChatRecord[]) {
     const workingTree = options?.workingTrees?.get(project.id)
-    // Project-scoped by nature: every chat that finished a turn after the tree
-    // got dirty is flagged, not just whichever one caused the dirt.
-    const dirtySinceMs = workingTree?.dirty ? workingTree.dirtySinceMs : undefined
+    // Authorship, not recency: a chat is relevant because a file it actually
+    // changed is still uncommitted. `touchedPaths` comes from diffing worktree
+    // snapshots at each turn boundary, so it covers edits made through any
+    // tool — including a Bash command we never parsed.
+    const dirtyPaths = workingTree?.dirty ? workingTree.paths : undefined
     return projectChats
       .sort((a, b) => getSidebarChatSortTimestamp(b) - getSidebarChatSortTimestamp(a))
       .map((chat) => {
         const pendingToolKind = options?.pendingToolKinds?.get(chat.id)
-        const uncommittedWork = dirtySinceMs != null
-          && chat.lastTurnEndedAt != null
-          && chat.lastTurnEndedAt > dirtySinceMs
+        // Chats that predate file tracking have no paths and so are never
+        // flagged — the safe direction: they simply sit in their date bucket
+        // until their next turn records something.
+        const uncommittedWork = dirtyPaths != null
+          && (chat.touchedPaths?.some((touched) => dirtyPaths.has(touched)) ?? false)
         return {
           _id: chat.id,
           _creationTime: chat.createdAt,
@@ -145,10 +155,16 @@ export function deriveSidebarData(
           ...(chat.doneAt ? { done: true, doneAt: chat.doneAt } : {}),
           localPath: project.localPath,
           provider: chat.provider,
+          ...(chat.lastModel ? { model: chat.lastModel } : {}),
           lastMessageAt: chat.lastMessageAt,
+          ...(chat.lastTurnStartedAt != null ? { lastTurnStartedAt: chat.lastTurnStartedAt } : {}),
           ...(chat.lastTurnEndedAt != null ? { lastTurnEndedAt: chat.lastTurnEndedAt } : {}),
+          ...(chat.lastAgentMessageAt != null ? { lastAgentMessageAt: chat.lastAgentMessageAt } : {}),
           ...(chat.lastUserMessagePreview ? { lastUserMessagePreview: chat.lastUserMessagePreview } : {}),
           ...(chat.lastAgentMessagePreview ? { lastAgentMessagePreview: chat.lastAgentMessagePreview } : {}),
+          ...(chat.lastAgentMessagePreviewAt != null
+            ? { lastAgentMessagePreviewAt: chat.lastAgentMessagePreviewAt }
+            : {}),
           ...(pendingToolKind ? { pendingToolKind } : {}),
           ...(uncommittedWork ? { uncommittedWork: true } : {}),
           hasAutomation: false,
@@ -169,7 +185,16 @@ export function deriveSidebarData(
       realTitle: project.title,
       ...(project.sidebarTitle ? { sidebarTitle: project.sidebarTitle } : {}),
       ...(repoLabel ? { repoName: repoLabel.repoName } : {}),
+      // Only ever stated when known. A label answers it outright; otherwise the
+      // probe has to have looked and come back empty-handed.
+      ...(repoLabel
+        ? { hasGitRepo: true }
+        : options?.projectsWithoutRepo?.has(project.id)
+          ? { hasGitRepo: false }
+          : {}),
       ...(repoLabel?.branchName ? { branchName: repoLabel.branchName } : {}),
+      ...(repoLabel?.repoOwner ? { repoOwner: repoLabel.repoOwner } : {}),
+      ...(repoLabel?.repoUrl ? { repoUrl: repoLabel.repoUrl } : {}),
       localPath: project.localPath,
       chats,
       previewChats,
@@ -267,7 +292,7 @@ export function deriveChatSnapshot(
   activeStatuses: Map<string, KannaStatus>,
   drainingChatIds: Set<string>,
   chatId: string,
-  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "history">
+  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "startIndex" | "readAnchor">
 ): ChatSnapshot | null {
   const chat = state.chatsById.get(chatId)
   if (!chat || chat.deletedAt) return null
@@ -296,7 +321,8 @@ export function deriveChatSnapshot(
       attachments: [...entry.attachments],
     })),
     messages: transcript.messages,
-    history: transcript.history,
+    startIndex: transcript.startIndex,
     availableProviders: [...SERVER_PROVIDERS],
+    readAnchor: transcript.readAnchor,
   }
 }

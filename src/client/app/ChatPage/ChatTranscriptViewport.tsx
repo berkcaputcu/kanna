@@ -1,7 +1,14 @@
-import { LegendList, type LegendListRef } from "@legendapp/list/react"
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  MessageScroller,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+  useMessageScroller,
+  useMessageScrollerVisibility,
+} from "../../components/ui/message-scroller"
 import { ArrowDown, Flower, Upload } from "lucide-react"
-import { AnimatedShinyText } from "../../components/ui/animated-shiny-text"
 import { DrainingIndicator } from "../../components/messages/DrainingIndicator"
 import { QueuedUserMessage } from "../../components/messages/QueuedUserMessage"
 import { OpenLocalLinkProvider, type OpenLocalLinkTarget } from "../../components/messages/shared"
@@ -14,22 +21,25 @@ import { formatPathWithTilde, shouldOpenLocalFileLinkInEditor } from "../../lib/
 import {
   buildResolvedTranscriptRows,
   KannaTranscriptRow,
-  type ResolvedTranscriptRow,
   useStableResolvedRows,
 } from "../KannaTranscript"
 import type { KannaState } from "../useKannaState"
 import type { KannaSocket } from "../socket"
-import type { ChatReadAnchorState } from "../useChatReadAnchor"
+import type { ChatReadAnchorState, ReadAnchorLayout } from "../useChatReadAnchor"
 import {
   buildRowIndexByMessageId,
   getLatestUserPrompt,
   getRowAnchorMessageId,
   isOptimisticMessageId,
+  resolveJumpTarget,
   resolveRestoreTarget,
   shouldPinForNewPrompt,
   type LatestUserPrompt,
+  type TranscriptJumpRequest,
   type TranscriptScrollTarget,
 } from "./transcriptScrollAnchors"
+import { TranscriptMinimap } from "./TranscriptMinimap"
+import { buildTranscriptTurns, type TranscriptTurn } from "./transcriptTurns"
 import { EmptyStateAuthCards } from "./EmptyStateAuthCards"
 import { EmptyStateUsageCards } from "./EmptyStateUsageCards"
 import {
@@ -37,28 +47,125 @@ import {
   EMPTY_STATE_TEXT,
 } from "./utils"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../../../shared/protocol"
+import { estimateTranscriptRowSize } from "./transcriptRowSize"
 
-/** Max auto-fetched history pages per chat when the list is too short to scroll. */
-const MAX_HISTORY_AUTO_FILL_PAGES = 4
+/**
+ * How close to the bottom counts as "at the end", as a fraction of viewport
+ * height.
+ *
+ * Deliberately one number shared by two consumers: the list uses it to decide
+ * whether to keep following new content, and the viewport uses it to decide
+ * whether the reader is following. When those disagreed, scrolling up slightly
+ * put them in opposite states — one pulling back to the bottom while the other
+ * offered a scroll-to-bottom button. In pixels because that is what the
+ * scroller measures in; a ratio silently read as 0.05px meant "at the end" was
+ * never true and following never engaged.
+ */
+const AT_END_THRESHOLD_PX = 48
+
+/**
+ * How long a pin keeps correcting itself as the transcript settles.
+ *
+ * Rows that have never been on screen stand in at an estimated height, so the
+ * target's position is computed against guesses and the content resizes under
+ * it as those rows actually render. On a cold open of a long chat that goes on
+ * for hundreds of milliseconds — far longer than a frame budget — so the
+ * correction is driven by layout changes and bounded by the clock instead.
+ */
+const PIN_SETTLE_MS = 2000
+
+/** Close enough to the intended offset to stop correcting. */
+const PIN_TOLERANCE_PX = 2
+
+/**
+ * How far down the visible transcript a jumped-to message lands, as a fraction
+ * of the height between the navbar and the composer.
+ *
+ * Flush under the chrome is right for *restoring* a read position — you were
+ * reading down from there, and every pixel above it is spent. It's wrong for
+ * arriving somewhere you asked for by name: a message pinned to the very top
+ * reads as the start of the transcript, with nothing behind it to say what it
+ * answers or follows. A fifth of a screen of lead-in is enough context to place
+ * it without spending the screen you came to read.
+ */
+const JUMP_LEAD_IN_RATIO = 0.2
+
+/**
+ * That fraction in pixels, measured off the live viewport rather than assumed —
+ * the composer grows with its draft, so the space actually being read is not a
+ * constant.
+ */
+function measureJumpLeadIn(
+  viewport: HTMLElement | null,
+  insets: { top: number, bottom: number }
+): number {
+  if (!viewport) return 0
+  const visible = viewport.clientHeight - insets.top - insets.bottom
+  return visible <= 0 ? 0 : Math.round(visible * JUMP_LEAD_IN_RATIO)
+}
+
+
+
+
+/**
+ * Slack before the transcript counts as scrollable. Content and viewport rarely
+ * land on equal subpixel values, and a hairline of scroll is not something
+ * worth offering a map for.
+ */
+const OVERFLOW_EPSILON_PX = 8
+
+/**
+ * Where the reader sits *within* the top row, plus the column width that makes
+ * that meaningful.
+ *
+ * Measured against the row rather than the scroll container: rows above it may
+ * still be standing in at an estimated height, so an absolute scroll position
+ * means something different on the next open. A distance into the row does not
+ * move when the content above it re-measures.
+ */
+/** The rendered width of the transcript column, which is what wraps text. */
+function measureTranscriptColumnWidth(viewport: HTMLElement | null): number | undefined {
+  const column = viewport?.querySelector("[data-transcript-row-id]")
+  return column ? Math.round(column.getBoundingClientRect().width) : undefined
+}
+
+function measureReadAnchorLayout(
+  viewport: HTMLElement | null,
+  rowId: string,
+  headerOffsetPx: number
+): ReadAnchorLayout | undefined {
+  const row = viewport?.querySelector(`[data-message-id="${CSS.escape(rowId)}"]`)
+  const column = row?.querySelector("[data-transcript-row-id]")
+  if (!viewport || !row || !column) return undefined
+  const offsetFromMessage = viewport.getBoundingClientRect().top + headerOffsetPx - row.getBoundingClientRect().top
+  return {
+    // The column, not the viewport: a wider window past the column's max width
+    // rewraps nothing, so it must not invalidate the offset.
+    transcriptWidth: Math.round(column.getBoundingClientRect().width),
+    offsetFromMessage: Math.round(offsetFromMessage),
+  }
+}
 
 /** No stored anchor — pin the latest user prompt. Used by the export viewer too. */
 const DEFAULT_READ_ANCHOR_STATE: ChatReadAnchorState = { resolved: true, anchor: null }
 
+/** What ChatPage drives the transcript with, in place of a list ref. */
+export interface TranscriptScrollHandle {
+  scrollToEnd: () => void
+}
+
 interface ChatTranscriptViewportProps {
   activeChatId: string | null
-  listRef: React.RefObject<LegendListRef | null>
+  listRef: React.RefObject<TranscriptScrollHandle | null>
   messages: KannaState["messages"]
   queuedMessages: KannaState["queuedMessages"]
   transcriptPaddingBottom: number
   localPath: string | null | undefined
   latestToolIds: KannaState["latestToolIds"]
-  isHistoryLoading: boolean
-  hasOlderHistory: boolean
   isProcessing: boolean
   runtimeStatus: string | null
   isDraining: boolean
   commandError: string | null
-  loadOlderHistory: () => Promise<void>
   onStopDraining: () => void
   onSteerQueuedMessage: (queuedMessageId: string) => Promise<void>
   onRemoveQueuedMessage: (queuedMessageId: string) => Promise<void>
@@ -83,10 +190,31 @@ interface ChatTranscriptViewportProps {
   /** Server-stored read position; restore waits for this to resolve. */
   readAnchorState?: ChatReadAnchorState
   /** Reports the message at the top of the viewport as the user scrolls. */
-  onReportReadAnchor?: (messageId: string, atEnd: boolean) => void
+  onReportReadAnchor?: (messageId: string, atEnd: boolean, layout?: ReadAnchorLayout) => void
+  /**
+   * A message to land on instead of the stored read position — set when the
+   * chat was opened by clicking a specific message in the sidebar hover card.
+   * Outranks the anchor on the open it arrives with, and moves an already-open
+   * chat on its own.
+   */
+  jumpRequest?: TranscriptJumpRequest | null
+  /** Fired once a jump request has been spent, so the sender can clear it. */
+  onJumpRequestHandled?: (requestId: string) => void
 }
 
-export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
+/**
+ * The provider owns scroll anchoring and follow-the-end; the body below reads
+ * them through hooks, which is why they are separate components.
+ */
+export const ChatTranscriptViewport = memo(function ChatTranscriptViewport(props: ChatTranscriptViewportProps) {
+  return (
+    <MessageScrollerProvider autoScroll scrollEdgeThreshold={AT_END_THRESHOLD_PX}>
+      <TranscriptScrollerBody {...props} />
+    </MessageScrollerProvider>
+  )
+})
+
+const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   activeChatId,
   listRef,
   messages,
@@ -94,13 +222,10 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   transcriptPaddingBottom,
   localPath,
   latestToolIds,
-  isHistoryLoading,
-  hasOlderHistory,
   isProcessing,
   runtimeStatus,
   isDraining,
   commandError,
-  loadOlderHistory,
   onStopDraining,
   onSteerQueuedMessage,
   onRemoveQueuedMessage,
@@ -123,7 +248,12 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   headerOffsetPx = CHAT_NAVBAR_OFFSET_PX,
   readAnchorState = DEFAULT_READ_ANCHOR_STATE,
   onReportReadAnchor,
+  jumpRequest = null,
+  onJumpRequestHandled,
 }: ChatTranscriptViewportProps) {
+  const { scrollToEnd, scrollToMessage } = useMessageScroller()
+  const { visibleMessageIds } = useMessageScrollerVisibility()
+  const viewportRef = useRef<HTMLDivElement | null>(null)
   const localLinkMenuTriggerRef = useRef<HTMLSpanElement | null>(null)
   const [toolGroupExpanded, setToolGroupExpanded] = useState<Record<string, boolean>>({})
   const [localLinkMenuTarget, setLocalLinkMenuTarget] = useState<OpenLocalLinkTarget | null>(null)
@@ -133,15 +263,45 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     isLoading: isProcessing,
     localPath: localPath ?? undefined,
     latestToolIds,
-    hasOlderHistory,
-  }), [hasOlderHistory, isProcessing, latestToolIds, localPath, messages])
+  }), [isProcessing, latestToolIds, localPath, messages])
   const resolvedRows = useStableResolvedRows(rawRows)
 
   useEffect(() => {
     setToolGroupExpanded({})
   }, [activeChatId])
 
+  useEffect(() => {
+    listRef.current = { scrollToEnd: () => { scrollToEnd() } }
+    return () => { listRef.current = null }
+  }, [listRef, scrollToEnd])
+
   const rowIndexByMessageId = useMemo(() => buildRowIndexByMessageId(resolvedRows), [resolvedRows])
+  const rowIndexByRowId = useMemo(
+    () => new Map(resolvedRows.map((row, index) => [row.id, index])),
+    [resolvedRows]
+  )
+  const loadedTurns = useMemo(() => buildTranscriptTurns(resolvedRows), [resolvedRows])
+  const turns = loadedTurns
+
+  /**
+   * Rendered row window plus whether the list can scroll at all — together they
+   * drive the minimap, which only earns its space once there is something to
+   * navigate.
+   */
+  const [transcriptOverflows, setTranscriptOverflows] = useState(false)
+  /** Scroll pane width, driving whether the minimap has a gutter to live in. */
+  const [transcriptWidth, setTranscriptWidth] = useState(0)
+
+  /**
+   * Overlay insets, in a ref so the geometry sync stays referentially stable —
+   * the bottom inset changes on every keystroke that grows the input, and
+   * re-subscribing the list listeners that often would be wasteful.
+   */
+  const viewportInsetsRef = useRef({ top: 0, bottom: 0 })
+  viewportInsetsRef.current = {
+    top: headerOffsetPx,
+    bottom: Math.max(0, transcriptPaddingBottom - TRANSCRIPT_PADDING_BOTTOM_OFFSET),
+  }
 
   // Kept in a ref so the native scroll handler can read the current rows
   // without being re-created (and re-attached) on every transcript change.
@@ -161,23 +321,61 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
    * on every open. Real input events are the one signal those can't fake.
    */
   const hasUserScrolledRef = useRef(false)
-  const scrollFramesRef = useRef<number[]>([])
+  const pendingPinRef = useRef<{ rowId: string; offsetFromMessage: number; until: number } | null>(null)
 
-  const cancelPendingScrollFrames = useCallback(() => {
-    for (const frameId of scrollFramesRef.current) {
-      window.cancelAnimationFrame(frameId)
+  useEffect(() => {
+    pendingPinRef.current = null
+  }, [activeChatId])
+
+  /**
+   * Put a row at the top of the viewport, re-issuing until it stays there.
+   *
+   * One pass is not enough on a cold open. Rows that have never been on screen
+   * report `contain-intrinsic-size` rather than a real height, so the target's
+   * position is computed against estimates; as the rows above it render, the
+   * content resizes underneath and the target drifts. Measured on a real chat,
+   * a single jump landed 219px short while the content grew from 2,600px to
+   * 8,900px.
+   *
+   * Each pass measures where the row actually ended up and corrects, stopping
+   * as soon as it is within a pixel or two of the intended offset — so a
+   * settled list costs one frame and nothing converges forever.
+   */
+  const pinRowToTop = useCallback((rowId: string, offsetFromMessage = 0) => {
+    if (!scrollToMessage(rowId, { align: "start", scrollMargin: headerOffsetPx - offsetFromMessage })) {
+      scrollToEnd()
+      return
     }
-    scrollFramesRef.current = []
-  }, [])
+    pendingPinRef.current = { rowId, offsetFromMessage, until: Date.now() + PIN_SETTLE_MS }
+  }, [headerOffsetPx, scrollToEnd, scrollToMessage])
+
+  /**
+   * Nudge an in-flight pin back onto its row after the layout moves under it.
+   *
+   * Gives up on a deadline, once the row is where it should be, or the moment
+   * the reader scrolls — a correction that fought a deliberate scroll would be
+   * far worse than one that lands a little short.
+   */
+  const correctPendingPin = useCallback(() => {
+    const pending = pendingPinRef.current
+    if (!pending) return
+    if (hasUserScrolledRef.current || Date.now() > pending.until) {
+      pendingPinRef.current = null
+      return
+    }
+    const viewport = viewportRef.current
+    const row = viewport?.querySelector(`[data-message-id="${CSS.escape(pending.rowId)}"]`)
+    if (!viewport || !row) return
+    const intended = headerOffsetPx - pending.offsetFromMessage
+    const offset = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top - intended
+    if (Math.abs(offset) <= PIN_TOLERANCE_PX) return
+    scrollToMessage(pending.rowId, { align: "start", scrollMargin: intended })
+  }, [headerOffsetPx, scrollToMessage])
 
   const applyScrollTarget = useCallback((target: TranscriptScrollTarget) => {
-    cancelPendingScrollFrames()
-
     if (target.kind === "end") {
       onIsAtEndChange(true)
-      scrollFramesRef.current.push(window.requestAnimationFrame(() => {
-        void listRef.current?.scrollToEnd?.({ animated: false })
-      }))
+      scrollToEnd()
       return
     }
 
@@ -185,44 +383,81 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     // auto-follow effect bails on this same commit instead of yanking us to
     // the bottom — child effects flush before parent effects.
     onIsAtEndChange(false)
+    pinRowToTop(target.rowId, target.offsetFromMessage)
+  }, [onIsAtEndChange, pinRowToTop])
 
-    const scrollToTarget = () => {
-      void listRef.current?.scrollToIndex?.({
-        index: target.index,
-        viewPosition: 0,
-        viewOffset: headerOffsetPx,
-        animated: false,
-      })
-    }
+  /** Jump requests already spent, so each one lands exactly once. */
+  const handledJumpRequestIdRef = useRef<string | null>(null)
 
-    scrollFramesRef.current.push(window.requestAnimationFrame(() => {
-      scrollToTarget()
-      // Rows are virtualized against an estimated height, so the first pass
-      // lands approximately; re-issue once real measurements have landed.
-      scrollFramesRef.current.push(window.requestAnimationFrame(() => {
-        scrollToTarget()
-      }))
-    }))
-  }, [cancelPendingScrollFrames, headerOffsetPx, listRef, onIsAtEndChange])
-
-  useEffect(() => cancelPendingScrollFrames, [cancelPendingScrollFrames])
+  /**
+   * Take the pending jump, if there is one and its message is loaded.
+   *
+   * Marks the request spent either way: a message id that isn't in the
+   * transcript is not going to appear by being retried on the next render, and
+   * an un-spent request would re-fire on every row change for the rest of the
+   * chat's life. The caller falls back to its normal target.
+   */
+  const consumeJumpTarget = useCallback((): TranscriptScrollTarget | null => {
+    if (!jumpRequest || handledJumpRequestIdRef.current === jumpRequest.requestId) return null
+    handledJumpRequestIdRef.current = jumpRequest.requestId
+    onJumpRequestHandled?.(jumpRequest.requestId)
+    const target = resolveJumpTarget(resolvedRows, jumpRequest.role)
+    if (target?.kind !== "pin") return target
+    // Negative, because `offsetFromMessage` measures how far *into* the message
+    // the landing point is: past its top for a restored read position, above it
+    // for the breathing room a jump wants.
+    return { ...target, offsetFromMessage: -measureJumpLeadIn(viewportRef.current, viewportInsetsRef.current) }
+  }, [jumpRequest, onJumpRequestHandled, resolvedRows])
 
   // Restore once per chat open: wait until rows exist *and* the stored anchor
   // has resolved, otherwise we'd land on the fallback and visibly jump when the
   // anchor arrives a moment later.
   useEffect(() => {
-    if (!activeChatId) return
+    if (!activeChatId) {
+      // Leaving the chat surface arms the next open to restore again. Without
+      // this the ref still names the chat just left, so returning to that same
+      // chat short-circuits below — no restore, and no geometry sync to light
+      // up the map. Navigating to a *different* chat happened to work, which
+      // is why this only showed up on away-and-back.
+      restoredChatIdRef.current = null
+      return
+    }
     if (restoredChatIdRef.current === activeChatId) return
     if (resolvedRows.length === 0 || !readAnchorState.resolved) return
 
     restoredChatIdRef.current = activeChatId
     hasUserScrolledRef.current = false
     latestPromptRef.current = getLatestUserPrompt(resolvedRows)
-    applyScrollTarget(resolveRestoreTarget(resolvedRows, readAnchorState.anchor, rowIndexByMessageId))
-  }, [activeChatId, applyScrollTarget, readAnchorState, resolvedRows, rowIndexByMessageId])
+    // A jump outranks the stored position — you asked for this message by
+    // name. Resolved here rather than in a second effect so the open scrolls
+    // once: two pins in the same commit would land on the anchor first and
+    // visibly slide off it. `hasUserScrolledRef` stays false so the pin's
+    // settle loop still corrects as rows measure in; the read anchor catches
+    // up from wherever the jump leaves us.
+    applyScrollTarget(consumeJumpTarget() ?? resolveRestoreTarget(
+      resolvedRows,
+      readAnchorState.anchor,
+      rowIndexByMessageId,
+      measureTranscriptColumnWidth(viewportRef.current),
+    ))
+  }, [activeChatId, applyScrollTarget, consumeJumpTarget, readAnchorState, resolvedRows, rowIndexByMessageId])
 
-  // Pin a newly sent prompt to the top. Streaming output never trips this
-  // because it leaves the latest prompt untouched.
+  // A jump into the chat that is *already* open — the restore effect above has
+  // already run for it, so nothing else would move the viewport. Deliberate in
+  // the same sense as clicking a minimap tick, so it counts as the reader
+  // choosing a position.
+  useEffect(() => {
+    if (!activeChatId || restoredChatIdRef.current !== activeChatId) return
+    if (resolvedRows.length === 0) return
+    const target = consumeJumpTarget()
+    if (!target) return
+    hasUserScrolledRef.current = true
+    applyScrollTarget(target)
+  }, [activeChatId, applyScrollTarget, consumeJumpTarget, resolvedRows])
+
+  // Sending jumps to the bottom, where the new prompt and the reply that
+  // follows it are. Streaming output never trips this because it leaves the
+  // latest prompt untouched — only a genuinely new one does.
   useEffect(() => {
     if (!activeChatId || restoredChatIdRef.current !== activeChatId) return
 
@@ -231,7 +466,7 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     latestPromptRef.current = nextPrompt
 
     if (!shouldPinForNewPrompt(previousPrompt, nextPrompt) || nextPrompt === null) return
-    applyScrollTarget({ kind: "pin", index: nextPrompt.rowIndex })
+    applyScrollTarget({ kind: "end" })
   }, [activeChatId, applyScrollTarget, resolvedRows])
 
   const handleToolGroupExpandedChange = useCallback((groupId: string, next: boolean) => {
@@ -251,86 +486,98 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
    * a coordinate space that already accounts for the sticky header — so it is
    * exactly "the message at the top of the screen".
    */
+  /**
+   * Which rows are on screen, as the scroller observes them.
+   *
+   * Real elements report their own visibility, so there is no geometry to
+   * mirror and nothing to re-derive when something moves rows under a
+   * stationary scroll position.
+   */
+  const visibleRowRange = useMemo(() => {
+    let start = Number.POSITIVE_INFINITY
+    let end = Number.NEGATIVE_INFINITY
+    for (const rowId of visibleMessageIds) {
+      const index = rowIndexByRowId.get(rowId)
+      if (index === undefined) continue
+      if (index < start) start = index
+      if (index > end) end = index
+    }
+    return Number.isFinite(start) ? { start, end } : null
+  }, [rowIndexByRowId, visibleMessageIds])
+
   const reportTopVisibleMessage = useCallback((isAtEnd: boolean) => {
     if (!onReportReadAnchor) return
     // Never let a programmatic scroll move the stored position.
     if (!hasUserScrolledRef.current) return
 
-    const start = listRef.current?.getState?.()?.start
-    if (typeof start !== "number") return
-    const row = resolvedRowsRef.current[start]
+    // The topmost row actually on screen — not the scroller's own anchor, which
+    // marks turn starts and so is far coarser than a read position wants.
+    const row = visibleRowRange === null ? undefined : resolvedRowsRef.current[visibleRowRange.start]
     if (!row) return
 
     const messageId = getRowAnchorMessageId(row)
     // Optimistic ids are client-local and will not resolve on another device.
     if (!messageId || isOptimisticMessageId(messageId)) return
 
-    onReportReadAnchor(messageId, isAtEnd)
-  }, [listRef, onReportReadAnchor])
+    onReportReadAnchor(messageId, isAtEnd, measureReadAnchorLayout(viewportRef.current, row.id, headerOffsetPx))
+  }, [headerOffsetPx, onReportReadAnchor, visibleRowRange])
 
-  const handleScroll = useCallback((event?: unknown) => {
-    const currentTarget = (
-      typeof event === "object"
-      && event !== null
-      && "currentTarget" in event
-      && event.currentTarget instanceof HTMLElement
-    )
-      ? event.currentTarget
-      : listRef.current?.getScrollableNode?.()
-
-    if (currentTarget instanceof HTMLElement) {
-      const distanceFromEnd = currentTarget.scrollHeight - currentTarget.clientHeight - currentTarget.scrollTop
-      const isAtEnd = distanceFromEnd <= 4
-      onIsAtEndChange(isAtEnd)
-      reportTopVisibleMessage(isAtEnd)
-      return
-    }
-
-    const state = listRef.current?.getState?.()
-    if (state) {
-      onIsAtEndChange(state.isAtEnd)
-      reportTopVisibleMessage(state.isAtEnd)
-    }
-  }, [listRef, onIsAtEndChange, reportTopVisibleMessage])
+  const handleScroll = useCallback(() => {
+    const scrollNode = viewportRef.current
+    if (!scrollNode) return
+    const distanceFromEnd = scrollNode.scrollHeight - scrollNode.clientHeight - scrollNode.scrollTop
+    const isAtEnd = distanceFromEnd <= AT_END_THRESHOLD_PX
+    onIsAtEndChange(isAtEnd)
+    reportTopVisibleMessage(isAtEnd)
+    setTranscriptOverflows(scrollNode.scrollHeight - scrollNode.clientHeight > OVERFLOW_EPSILON_PX)
+  }, [onIsAtEndChange, reportTopVisibleMessage])
 
   useEffect(() => {
-    let cleanup: (() => void) | undefined
-    const frameId = window.requestAnimationFrame(() => {
-      const scrollNode = listRef.current?.getScrollableNode?.()
-      if (!(scrollNode instanceof HTMLElement)) {
-        return
-      }
+    const scrollNode = viewportRef.current
+    if (!scrollNode) return
 
-      const handleNativeScroll = () => {
-        handleScroll({ currentTarget: scrollNode })
-      }
+    // Input events are the only reliable way to tell the user's own scrolling
+    // apart from a restore or a pin, which also emit `scroll`.
+    const markUserScrolled = () => {
+      hasUserScrolledRef.current = true
+    }
+    const userIntentEvents = ["wheel", "touchmove", "pointerdown", "keydown"] as const
 
-      // Input events are the only reliable way to tell the user's own
-      // scrolling apart from a restore/pin/auto-follow, which also emit
-      // `scroll` and keep settling for several frames as rows measure.
-      const markUserScrolled = () => {
-        hasUserScrolledRef.current = true
-      }
-      const userIntentEvents = ["wheel", "touchmove", "pointerdown", "keydown"] as const
+    // Resizing the pane changes both the minimap's gutter and whether the same
+    // content still overflows, neither of which emits a scroll.
+    const syncSize = () => {
+      const nextWidth = scrollNode.clientWidth
+      setTranscriptWidth((current) => (Math.abs(current - nextWidth) < 1 ? current : nextWidth))
+      handleScroll()
+    }
+    const sizeObserver = new ResizeObserver(syncSize)
+    sizeObserver.observe(scrollNode)
+    syncSize()
 
-      scrollNode.addEventListener("scroll", handleNativeScroll, { passive: true })
-      for (const eventName of userIntentEvents) {
-        scrollNode.addEventListener(eventName, markUserScrolled, { passive: true })
-      }
-      handleNativeScroll()
-      cleanup = () => {
-        scrollNode.removeEventListener("scroll", handleNativeScroll)
-        for (const eventName of userIntentEvents) {
-          scrollNode.removeEventListener(eventName, markUserScrolled)
-        }
-      }
+    // The content grows as offscreen rows render for the first time, which is
+    // what pulls a fresh pin off its target. Watching it is how the correction
+    // knows to re-aim.
+    const content = scrollNode.querySelector('[data-slot="message-scroller-content"]')
+    const contentObserver = new ResizeObserver(() => {
+      handleScroll()
+      correctPendingPin()
     })
+    if (content) contentObserver.observe(content)
+
+    scrollNode.addEventListener("scroll", handleScroll, { passive: true })
+    for (const eventName of userIntentEvents) {
+      scrollNode.addEventListener(eventName, markUserScrolled, { passive: true })
+    }
 
     return () => {
-      window.cancelAnimationFrame(frameId)
-      cleanup?.()
+      sizeObserver.disconnect()
+      contentObserver.disconnect()
+      scrollNode.removeEventListener("scroll", handleScroll)
+      for (const eventName of userIntentEvents) {
+        scrollNode.removeEventListener(eventName, markUserScrolled)
+      }
     }
-  }, [activeChatId, handleScroll, listRef, resolvedRows.length])
+  }, [activeChatId, correctPendingPin, handleScroll])
 
   // The button lives outside the scroll node, so it never trips the input
   // listeners — but jumping to the bottom is an explicit read-position choice.
@@ -339,44 +586,17 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     scrollToBottom()
   }, [scrollToBottom])
 
-  const handleStartReached = useCallback(() => {
-    if (isHistoryLoading || !hasOlderHistory) {
-      return
-    }
-    void loadOlderHistory()
-  }, [hasOlderHistory, isHistoryLoading, loadOlderHistory])
-
-  // A long tool-call run can collapse the entire loaded window into a single
-  // tool-group row, leaving the list too short to scroll — so onStartReached
-  // can never fire. Auto-fetch older pages until the viewport overflows
-  // (capped); the header button below is the manual escape hatch beyond that.
-  const autoFillPagesRef = useRef(0)
-
-  useEffect(() => {
-    autoFillPagesRef.current = 0
-  }, [activeChatId])
-
-  useEffect(() => {
-    if (isHistoryLoading || !hasOlderHistory || resolvedRows.length === 0) {
-      return
-    }
-    if (autoFillPagesRef.current >= MAX_HISTORY_AUTO_FILL_PAGES) {
-      return
-    }
-
-    const frameId = window.requestAnimationFrame(() => {
-      const scrollNode = listRef.current?.getScrollableNode?.()
-      if (!(scrollNode instanceof HTMLElement)) {
-        return
-      }
-      if (scrollNode.scrollHeight > scrollNode.clientHeight + 1) {
-        return
-      }
-      autoFillPagesRef.current += 1
-      void loadOlderHistory()
-    })
-    return () => window.cancelAnimationFrame(frameId)
-  }, [activeChatId, hasOlderHistory, isHistoryLoading, listRef, loadOlderHistory, resolvedRows.length])
+  // Read through refs so the retry loop below sees state from the render that
+  // each history page produced, not the one it started in.
+  const rowIndexByMessageIdRef = useRef(rowIndexByMessageId)
+  rowIndexByMessageIdRef.current = rowIndexByMessageId
+  // Same reasoning as the scroll-to-bottom button: the minimap sits outside the
+  // scroll node, so it never trips the input listeners, but jumping to a turn is
+  // as deliberate a read-position choice as scrolling there by hand.
+  const handleSelectTurn = useCallback((turn: TranscriptTurn) => {
+    hasUserScrolledRef.current = true
+    applyScrollTarget({ kind: "pin", rowId: turn.id })
+  }, [applyScrollTarget])
 
   const handleOpenLocalLinkClick = useCallback((target: OpenLocalLinkTarget) => {
     if (target.trigger !== "contextmenu") {
@@ -401,43 +621,17 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     })
   }, [onOpenLocalLink])
 
-  const renderItem = useCallback(({ item }: { item: ResolvedTranscriptRow }) => (
-    <div className="mx-auto w-full max-w-[800px] pb-5" data-transcript-row-id={item.id}>
-      <KannaTranscriptRow
-        row={item}
-        toolGroupExpanded={item.kind === "tool-group" ? (toolGroupExpanded[item.id] ?? false) : undefined}
-        onToolGroupExpandedChange={handleToolGroupExpandedChange}
-        onAskUserQuestionSubmit={onAskUserQuestionSubmit}
-        onExitPlanModeConfirm={onExitPlanModeConfirm}
-      />
-    </div>
-  ), [handleToolGroupExpandedChange, onAskUserQuestionSubmit, onExitPlanModeConfirm, toolGroupExpanded])
+  // Stable identity: the viewport commits a render on every scroll event (the
+  // visible row range changes constantly), and a fresh style object hands the
+  // list a "content container changed" signal each time, which relays out the
+  // header and footer and can itself re-trigger follow-the-bottom.
+  const contentContainerStyle = useMemo(
+    () => ({ paddingBottom: transcriptPaddingBottom + 10 }),
+    [transcriptPaddingBottom]
+  )
 
   const listHeader = (
-    <div className="mx-auto w-full max-w-[800px]" style={{ paddingTop: `${headerOffsetPx}px` }}>
-      {isHistoryLoading ? (
-        <div className="flex justify-center pb-4">
-          <span className="text-sm translate-y-[-0.5px]">
-            <AnimatedShinyText
-              animate
-              shimmerWidth={Math.max(20, "Loading more messages...".length * 3)}
-            >
-              Loading more messages...
-            </AnimatedShinyText>
-          </span>
-        </div>
-      ) : hasOlderHistory ? (
-        <div className="flex justify-center pb-4">
-          <button
-            type="button"
-            onClick={() => void loadOlderHistory()}
-            className="cursor-pointer rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            Load older messages
-          </button>
-        </div>
-      ) : null}
-    </div>
+    <div className="mx-auto w-full max-w-[800px]" style={{ paddingTop: `${headerOffsetPx}px` }} />
   )
 
   const listFooter = (
@@ -465,28 +659,61 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
   return (
     <>
       <OpenLocalLinkProvider onOpenLocalLink={handleOpenLocalLinkClick}>
-        <LegendList<ResolvedTranscriptRow>
-          ref={listRef}
-          data={resolvedRows}
-          extraData={toolGroupExpanded}
-          keyExtractor={keyExtractor}
-          renderItem={renderItem}
-          estimatedItemSize={96}
-          // No initialScrollAtEnd: the prop is captured at mount, and opening a
-          // chat now restores to a stored anchor rather than the bottom. The
-          // restore effect above drives the initial position instead.
-          maintainScrollAtEnd
-          maintainScrollAtEndThreshold={0.1}
-          maintainVisibleContentPosition
-          onScroll={handleScroll}
-          onStartReached={handleStartReached}
-          onStartReachedThreshold={0.1}
-          className="h-full flex-1 overflow-x-hidden overscroll-y-contain px-3 scroll-pt-[72px] [scrollbar-gutter:auto]"
-          contentContainerStyle={{ paddingBottom: transcriptPaddingBottom + 10 }}
-          ListHeaderComponent={listHeader}
-          ListFooterComponent={listFooter}
-        />
+        <MessageScroller className="h-full flex-1">
+          <MessageScrollerViewport
+            ref={viewportRef}
+            className="h-full overflow-x-hidden overscroll-y-contain px-3"
+            style={{ scrollPaddingTop: headerOffsetPx }}
+          >
+            <MessageScrollerContent style={contentContainerStyle}>
+              {listHeader}
+              {resolvedRows.map((row) => (
+                <MessageScrollerItem
+                  key={row.id}
+                  messageId={row.id}
+                  // Deliberately not a scroll anchor. Marking turn starts makes
+                  // the scroller pull each new one to the top of the viewport —
+                  // its "new turn begins here" behaviour. Sending should land
+                  // at the bottom, where the reply arrives, and the read
+                  // position is taken from the visible rows rather than from
+                  // anchors.
+                  // A per-row estimate of the height an offscreen row reserves.
+                  // A collapsed tool header and a long answer differ by more
+                  // than an order of magnitude, and the browser only keeps this
+                  // until it has laid the row out once.
+                  style={{ containIntrinsicSize: `auto ${estimateTranscriptRowSize(row)}px` }}
+                >
+                  <div className="mx-auto w-full max-w-[800px] pb-5" data-transcript-row-id={row.id}>
+                    <KannaTranscriptRow
+                      row={row}
+                      toolGroupExpanded={row.kind === "tool-group" ? (toolGroupExpanded[row.id] ?? false) : undefined}
+                      onToolGroupExpandedChange={handleToolGroupExpandedChange}
+                      onAskUserQuestionSubmit={onAskUserQuestionSubmit}
+                      onExitPlanModeConfirm={onExitPlanModeConfirm}
+                    />
+                  </div>
+                </MessageScrollerItem>
+              ))}
+              {listFooter}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+        </MessageScroller>
       </OpenLocalLinkProvider>
+
+      {showEmptyState ? null : (
+        <TranscriptMinimap
+          turns={turns}
+          visibleStart={visibleRowRange?.start ?? -1}
+          visibleEnd={visibleRowRange?.end ?? -1}
+          transcriptOverflows={transcriptOverflows}
+          topPx={headerOffsetPx}
+          // Match the empty state: transcriptPaddingBottom carries extra
+          // clearance the message list needs but overlays should not.
+          bottomPx={Math.max(0, transcriptPaddingBottom - TRANSCRIPT_PADDING_BOTTOM_OFFSET)}
+          containerWidthPx={transcriptWidth}
+          onSelectTurn={handleSelectTurn}
+        />
+      )}
 
       <ContextMenu onOpenChange={(open) => {
         if (!open) {
@@ -639,7 +866,3 @@ export const ChatTranscriptViewport = memo(function ChatTranscriptViewport({
     </>
   )
 })
-
-function keyExtractor(item: ResolvedTranscriptRow) {
-  return item.id
-}

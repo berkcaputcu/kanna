@@ -1,12 +1,15 @@
 import { memo, useMemo, useState } from "react"
 import { Archive, ChevronRight, MoreHorizontal } from "lucide-react"
+import type { ChatJumpRole } from "../../../lib/chat-navigation"
 import type { SidebarChatRow, SidebarData } from "../../../../shared/types"
 import {
   computeSidebarThreadSections,
   flattenSidebarThreads,
+  mergeRelevantThreads,
   type SidebarThread,
 } from "../../../lib/thread-sections"
 import { getThreadDetailLabel } from "../../../lib/thread-detail-label"
+import { useDraftStartTimes } from "../../../stores/chatInputStore"
 import { cn, normalizeChatId } from "../../../lib/utils"
 import { Button } from "../../ui/button"
 import {
@@ -47,9 +50,9 @@ function SectionHeader({
       onClick={onToggle}
     >
       {/* Chevron trails the label rather than leading it, so every title starts
-          at the same left edge — including the non-collapsible In Progress /
-          Review headers, which have no chevron to occupy a leading slot. */}
-      <div className="flex items-center gap-1.5">
+          at the same left edge — including the non-collapsible In Progress
+          header, which has no chevron to occupy a leading slot. */}
+      <div className="flex items-center gap-1">
         {/* Faint by design: in this tab the chat rows carry full contrast, so
             the section labels stay quiet chrome you scan past. (The Projects
             tab is the other way round — full-contrast project headers over
@@ -107,6 +110,10 @@ interface Props {
   /** Anchor for the date buckets; bucketing runs in the browser so it always follows the user's local timezone. */
   nowMs: number
   onSelectChat: (chatId: string) => void
+  /** Opens a chat at one end of its last exchange — the card's clickable previews. */
+  onSelectChatMessage: (chatId: string, role: ChatJumpRole) => void
+  /** Prompts to `git init` a chat's project — the card's "Setup Git". */
+  onSetupGit: (chatId: string) => void
   onOpenArchivedChat: (chatId: string) => void
   onRestoreChat: (chatId: string) => void
   onCreateChat: (projectId: string) => void
@@ -120,10 +127,11 @@ interface Props {
 }
 
 /**
- * The New Sidebar's Chats tab: In Progress and Review lead (same membership as
- * the palette's sections), followed by collapsible date buckets — This Week,
- * Last Week, Last 30 Days — and a trailing Archived section. Only This Week
- * starts expanded; empty sections never render. Rows reuse the palette's
+ * The New Sidebar's Chats tab: In Progress leads, then Relevant (Review folded
+ * in — see `mergeRelevantThreads`), followed by collapsible date buckets —
+ * Today, Yesterday, This Week, Last 30 Days — and a trailing Archived section.
+ * Only the first date bucket starts expanded, so everything below the most
+ * recent day of activity is folded away; empty sections never render. Rows reuse the palette's
  * compact thread row (no prompt preview) and the standard chat context menu;
  * bucket headers offer Archive All via "…" or right-click.
  */
@@ -133,6 +141,8 @@ function ThreadSectionsImpl({
   editorLabel,
   nowMs,
   onSelectChat,
+  onSelectChatMessage,
+  onSetupGit,
   onOpenArchivedChat,
   onRestoreChat,
   onCreateChat,
@@ -144,9 +154,17 @@ function ThreadSectionsImpl({
   onCopyPath,
   onOpenExternalPath,
 }: Props) {
+  // Drafts are browser-local, so they reach the sections as an argument rather
+  // than as a field on the rows the server sent.
+  const draftStartTimes = useDraftStartTimes()
   const sections = useMemo(
-    () => computeSidebarThreadSections(flattenSidebarThreads(data), nowMs),
-    [data, nowMs]
+    () => computeSidebarThreadSections(flattenSidebarThreads(data), nowMs, draftStartTimes),
+    [data, draftStartTimes, nowMs]
+  )
+  // This tab shows Review inside Relevant rather than as its own header.
+  const relevant = useMemo(
+    () => mergeRelevantThreads(sections, draftStartTimes),
+    [draftStartTimes, sections]
   )
   const normalizedActiveChatId = activeChatId ? normalizeChatId(activeChatId) : null
   // User toggles override each bucket's default (Today/Yesterday open, rest
@@ -162,14 +180,13 @@ function ThreadSectionsImpl({
 
   const pinnedGroups = [
     { key: "in-progress", heading: "In Progress", threads: sections.inProgress },
-    { key: "review", heading: "Review", threads: sections.review },
   ].filter((group) => group.threads.length > 0)
 
   // Relevant counts here too: it drains chats out of the buckets, so a tab whose
   // every chat is flagged would otherwise have an empty `buckets` and render nothing.
   if (
     pinnedGroups.length === 0
-    && sections.relevant.length === 0
+    && relevant.length === 0
     && sections.buckets.length === 0
     && sections.archived.length === 0
   ) return null
@@ -183,6 +200,8 @@ function ThreadSectionsImpl({
       detailLabel={getThreadDetailLabel(thread, "cross-project", nowMs)}
       dimIdleTitles={false}
       onSelect={onSelectChat}
+      onSelectMessage={onSelectChatMessage}
+      onSetupGit={onSetupGit}
       onCreateChat={onCreateChat}
       onRenameChat={onRenameChat}
       onShareChat={onShareChat}
@@ -205,10 +224,11 @@ function ThreadSectionsImpl({
           </div>
         </div>
       ))}
-      {sections.relevant.length > 0 ? (() => {
+      {relevant.length > 0 ? (() => {
         // Collapsible like a date bucket, but starts open — it's the reason the
-        // section exists. Sits above Today so everything touching the current
-        // diff reads as one group rather than scattered across the buckets.
+        // section exists. Sits above Today so everything waiting on you or
+        // touching the current diff reads as one group rather than scattered
+        // across the buckets.
         const isExpanded = expandOverrides["relevant"] ?? true
         return (
           <div>
@@ -217,12 +237,12 @@ function ThreadSectionsImpl({
               isExpanded={isExpanded}
               onToggle={() => toggleBucket("relevant", true)}
               onArchiveAll={() => {
-                for (const thread of sections.relevant) onArchiveChat(thread.row)
+                for (const thread of relevant) onArchiveChat(thread.row)
               }}
             />
             {isExpanded ? (
               <div className="space-y-[2px] mb-3">
-                {sections.relevant.map(renderRow)}
+                {relevant.map(renderRow)}
               </div>
             ) : null}
           </div>
