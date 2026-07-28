@@ -72,6 +72,12 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
         planMode: false,
         autoPlan: false,
       },
+      opencode: {
+        model: "opencode/north-mini-code-free",
+        modelOptions: {},
+        planMode: false,
+        autoPlan: false,
+      },
     },
     newSidebarEnabled: true,
     newProjectsDirectory: "~/Kanna",
