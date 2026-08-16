@@ -874,6 +874,12 @@ export class AgentCoordinator {
   private onClaudeRateLimit: ((info: ClaudeRateLimitInfoRaw) => void) | null = null
   private cursorModelCatalogApplied = false
   readonly activeTurns = new Map<string, ActiveTurn>()
+  /**
+   * Codex can deliver an approval request just after its completion event.
+   * Keep the completed turn available as an approval owner until a new turn,
+   * explicit cancellation, or session shutdown supersedes it.
+   */
+  readonly completedApprovalTurns = new Map<string, ActiveTurn>()
   readonly drainingStreams = new Map<string, { turn: HarnessTurn }>()
   readonly claudeSessions = new Map<string, ClaudeSessionState>()
 
@@ -946,11 +952,14 @@ export class AgentCoordinator {
     for (const [chatId, turn] of this.activeTurns.entries()) {
       statuses.set(chatId, turn.status)
     }
+    for (const [chatId, turn] of this.completedApprovalTurns.entries()) {
+      if (!statuses.has(chatId) && turn.pendingTools.size > 0) statuses.set(chatId, turn.status)
+    }
     return statuses
   }
 
   getPendingTool(chatId: string): PendingToolSnapshot | null {
-    const pending = this.activeTurns.get(chatId)?.pendingTools.values().next().value
+    const pending = (this.activeTurns.get(chatId) ?? this.completedApprovalTurns.get(chatId))?.pendingTools.values().next().value
     if (!pending) return null
     return { toolUseId: pending.toolUseId, toolKind: pending.tool.toolKind }
   }
@@ -1009,6 +1018,11 @@ export class AgentCoordinator {
 
   async closeChat(chatId: string) {
     await this.stopDraining(chatId)
+    const completed = this.completedApprovalTurns.get(chatId)
+    if (completed) {
+      await this.discardPendingTools(completed)
+      this.completedApprovalTurns.delete(chatId)
+    }
     const claudeSession = this.claudeSessions.get(chatId)
     if (claudeSession) {
       claudeSession.session.close()
@@ -1360,14 +1374,25 @@ export class AgentCoordinator {
 
     const onToolRequest = async (request: HarnessToolRequest): Promise<unknown> => {
       const active = this.activeTurns.get(args.chatId)
-      if (!active) {
+      const completed = active ? null : this.completedApprovalTurns.get(args.chatId)
+      const owner = active ?? completed
+      if (!owner) {
         // A provider can emit a request just as its result is being drained.
         // There is no UI turn left to wait on in that case, so resolve it as a
         // discarded request instead of leaving the provider's RPC hanging.
         return discardedToolResult(request.tool)
       }
 
-      active.status = "waiting_for_user"
+      if (completed) {
+        // The normal Codex queue is already finished for a late approval, so
+        // persist the tool call here instead of trying to push into that queue.
+        await this.store.appendMessage(args.chatId, timestamped({
+          kind: "tool_call",
+          tool: request.tool,
+        }))
+      }
+
+      owner.status = "waiting_for_user"
       this.emitStateChange(args.chatId)
 
       return await new Promise<unknown>((resolve) => {
@@ -1376,7 +1401,7 @@ export class AgentCoordinator {
           tool: request.tool,
           resolve,
         }
-        active.pendingTools.set(pending.toolUseId, pending)
+        owner.pendingTools.set(pending.toolUseId, pending)
       })
     }
 
@@ -1783,7 +1808,8 @@ export class AgentCoordinator {
     if (chat.archivedAt) {
       await this.store.unarchiveChat(chatId)
     }
-    if (this.activeTurns.has(chatId)) {
+    const completedApproval = this.completedApprovalTurns.get(chatId)
+    if (this.activeTurns.has(chatId) || (completedApproval && completedApproval.pendingTools.size > 0)) {
       const queuedMessage = await this.enqueueMessage(chatId, command.content, command.attachments ?? [], {
         provider: command.provider,
         model: command.model,
@@ -1793,6 +1819,12 @@ export class AgentCoordinator {
         autoPlan: command.autoPlan,
       })
       return { chatId, queuedMessageId: queuedMessage.id, queued: true as const }
+    }
+    if (completedApproval) {
+      // No approval is currently waiting. A new turn supersedes the retained
+      // callback owner, and the app-server will clear its matching handler
+      // when that turn starts.
+      this.completedApprovalTurns.delete(chatId)
     }
 
     const provider = this.resolveProvider(command, chat.provider)
@@ -2204,11 +2236,25 @@ export class AgentCoordinator {
 
         if (event.entry.kind === "result") {
           active.hasFinalResult = true
-          await this.discardPendingTools(active)
+          // Codex may have emitted an approval request concurrently with its
+          // completion event. Keep those requests visible instead of turning
+          // them into an automatic cancellation while the stream is drained.
+          if (active.provider !== "codex") {
+            await this.discardPendingTools(active)
+          }
           if (event.entry.isError) {
             await this.store.recordTurnFailed(active.chatId, event.entry.result || "Turn failed")
           } else if (!active.cancelRequested) {
             await this.store.recordTurnFinished(active.chatId)
+          }
+          if (active.provider === "codex") {
+            this.completedApprovalTurns.set(active.chatId, active)
+            if (active.pendingTools.size > 0) {
+              active.status = "waiting_for_user"
+              this.activeTurns.delete(active.chatId)
+              this.emitStateChange(active.chatId)
+              continue
+            }
           }
           // Remove from activeTurns as soon as the result arrives so the UI
           // transitions to idle immediately. The stream may still be open
@@ -2331,6 +2377,15 @@ export class AgentCoordinator {
     }
 
     const active = this.activeTurns.get(chatId)
+    const completed = active ? null : this.completedApprovalTurns.get(chatId)
+    if (!active && !completed) return
+    if (completed) {
+      await this.discardPendingTools(completed)
+      this.completedApprovalTurns.delete(chatId)
+      this.emitStateChange(chatId)
+      await this.maybeStartNextQueuedMessage(chatId)
+      return
+    }
     if (!active) return
 
     logClaudeSteer("cancel_requested", {
@@ -2405,18 +2460,20 @@ export class AgentCoordinator {
 
   async respondTool(command: Extract<ClientCommand, { type: "chat.respondTool" }>) {
     const active = this.activeTurns.get(command.chatId)
-    if (!active) {
+    const completed = active ? null : this.completedApprovalTurns.get(command.chatId)
+    const owner = active ?? completed
+    if (!owner) {
       throw new Error("No pending tool request")
     }
 
-    const pending = active.pendingTools.get(command.toolUseId)
+    const pending = owner.pendingTools.get(command.toolUseId)
     if (!pending) {
       throw new Error("Tool response does not match active request")
     }
 
     // Claim this request before awaiting persistence so duplicate responses
     // cannot both resolve the same harness request.
-    active.pendingTools.delete(command.toolUseId)
+    owner.pendingTools.delete(command.toolUseId)
 
     await this.store.appendMessage(
       command.chatId,
@@ -2427,7 +2484,7 @@ export class AgentCoordinator {
       })
     )
 
-    active.status = active.pendingTools.size > 0 ? "waiting_for_user" : "running"
+    owner.status = owner.pendingTools.size > 0 ? "waiting_for_user" : "running"
 
     if (pending.tool.toolKind === "exit_plan_mode") {
       const result = (command.result ?? {}) as {
@@ -2440,8 +2497,8 @@ export class AgentCoordinator {
         await this.store.appendMessage(command.chatId, timestamped({ kind: "context_cleared" }))
       }
 
-      if (active.provider === "codex") {
-        active.postToolFollowUp = result.confirmed
+      if (owner.provider === "codex") {
+        owner.postToolFollowUp = result.confirmed
           ? {
               content: result.message
                 ? `Proceed with the approved plan. Additional guidance: ${result.message}`

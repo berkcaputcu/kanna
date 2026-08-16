@@ -1008,7 +1008,7 @@ describe("AgentCoordinator codex integration", () => {
     expect(secondDecision).toBe("acceptForSession")
   })
 
-  test("declines an approval that arrives after Codex turn cleanup", async () => {
+  test("keeps approvals respondable after Codex turn cleanup", async () => {
     let pendingDecision: unknown
     let lateDecision: unknown
     const fakeCodexManager = {
@@ -1079,10 +1079,25 @@ describe("AgentCoordinator codex integration", () => {
     })
 
     await waitFor(() => store.turnFinishedCount === 1)
-    await waitFor(() => pendingDecision !== undefined)
+    await waitFor(() => coordinator.getPendingTool("chat-1")?.toolUseId === "approval-pending")
+    await coordinator.respondTool({
+      type: "chat.respondTool",
+      chatId: "chat-1",
+      toolUseId: "approval-pending",
+      result: { decision: "accept" },
+    })
+
+    await waitFor(() => coordinator.getPendingTool("chat-1")?.toolUseId === "approval-late")
+    await coordinator.respondTool({
+      type: "chat.respondTool",
+      chatId: "chat-1",
+      toolUseId: "approval-late",
+      result: { decision: "acceptForSession" },
+    })
+
     await waitFor(() => lateDecision !== undefined)
-    expect(pendingDecision).toBe("cancel")
-    expect(lateDecision).toBe("cancel")
+    expect(pendingDecision).toBe("accept")
+    expect(lateDecision).toBe("acceptForSession")
   })
 
   test("cancelling a waiting ask-user-question records a discarded tool result", async () => {

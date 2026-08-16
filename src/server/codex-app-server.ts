@@ -136,6 +136,7 @@ interface SessionContext {
   child: CodexAppServerProcess
   pendingRequests: Map<CodexRequestId, PendingRequest<unknown>>
   pendingTurn: PendingTurn | null
+  approvalTurns: Map<string, PendingTurn>
   sessionToken: string | null
   accessMode: CodexAccessMode
   stderrLines: string[]
@@ -767,6 +768,7 @@ export class CodexAppServerManager {
       child,
       pendingRequests: new Map(),
       pendingTurn: null,
+      approvalTurns: new Map(),
       sessionToken: null,
       accessMode: "full-access",
       stderrLines: [],
@@ -815,6 +817,7 @@ export class CodexAppServerManager {
       child,
       pendingRequests: new Map(),
       pendingTurn: null,
+      approvalTurns: new Map(),
       sessionToken: null,
       accessMode,
       stderrLines: [],
@@ -890,7 +893,15 @@ export class CodexAppServerManager {
   async startTurn(args: StartCodexTurnArgs): Promise<HarnessTurn> {
     const context = this.requireSession(args.chatId)
     if (context.pendingTurn) {
-      throw new Error("Codex turn is already running")
+      if (!context.pendingTurn.resolved) {
+        throw new Error("Codex turn is already running")
+      }
+      context.pendingTurn = null
+      context.approvalTurns.clear()
+    } else {
+      // A completed turn may still own a late approval request. A new turn
+      // supersedes that callback owner before its own approval lifecycle starts.
+      context.approvalTurns.clear()
     }
 
     const queue = new AsyncQueue<HarnessEvent>()
@@ -954,8 +965,10 @@ export class CodexAppServerManager {
       } satisfies TurnStartParams)
       if (context.pendingTurn) {
         context.pendingTurn.turnId = response.turn.id
+        context.approvalTurns.set(response.turn.id, context.pendingTurn)
       } else {
         pendingTurn.turnId = response.turn.id
+        context.approvalTurns.set(response.turn.id, pendingTurn)
       }
     } catch (error) {
       context.pendingTurn = null
@@ -1055,6 +1068,7 @@ export class CodexAppServerManager {
     if (!context) return
     context.closed = true
     context.pendingTurn?.queue.finish()
+    context.approvalTurns.clear()
     this.sessions.delete(chatId)
     try {
       context.child.kill("SIGKILL")
@@ -1170,7 +1184,13 @@ export class CodexAppServerManager {
   }
 
   private async handleServerRequest(context: SessionContext, request: ServerRequest) {
+    const requestParams = asRecord(request.params)
+    const requestTurnId = typeof requestParams?.turnId === "string" ? requestParams.turnId : null
     const pendingTurn = context.pendingTurn
+      ?? (requestTurnId ? context.approvalTurns.get(requestTurnId) : undefined)
+      ?? (request.method === "mcpServer/elicitation/request"
+        ? [...context.approvalTurns.values()].at(-1)
+        : undefined)
     if (!pendingTurn) {
       if (request.method === "item/commandExecution/requestApproval" || request.method === "item/fileChange/requestApproval") {
         this.writeMessage(context, { id: request.id, result: { decision: "cancel" } })
@@ -1687,6 +1707,7 @@ export class CodexAppServerManager {
       pending.reject(new Error(message))
     }
     context.pendingRequests.clear()
+    context.approvalTurns.clear()
     context.closed = true
   }
 

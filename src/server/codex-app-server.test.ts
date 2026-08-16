@@ -1968,6 +1968,79 @@ describe("CodexAppServerManager", () => {
     })
   })
 
+  test("asks for approval when a request arrives after turn completion", async () => {
+    let resolveApprovalSeen!: () => void
+    const approvalSeen = new Promise<void>((resolve) => {
+      resolveApprovalSeen = resolve
+    })
+    let resolveApprovalResponse!: () => void
+    const approvalResponse = new Promise<void>((resolve) => {
+      resolveApprovalResponse = resolve
+    })
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.id === "late-approval-1" && message.result) {
+        resolveApprovalResponse()
+      } else if (message.method === "initialize") {
+        child.writeServerMessage({ id: message.id, result: { userAgent: "codex-test" } })
+      } else if (message.method === "thread/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { thread: { id: "thread-1" }, model: "gpt-5.4", reasoningEffort: "high" },
+        })
+      } else if (message.method === "turn/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { turn: { id: "turn-1", status: "inProgress", error: null } },
+        })
+        child.writeServerMessage({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "completed", error: null },
+          },
+        })
+        setTimeout(() => {
+          child.writeServerMessage({
+            id: "late-approval-1",
+            method: "item/commandExecution/requestApproval",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "call-1",
+              command: "gh pr create",
+              cwd: "/tmp/project",
+            },
+          })
+        }, 5)
+      }
+    })
+
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    await manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
+
+    const turn = await manager.startTurn({
+      chatId: "chat-1",
+      model: "gpt-5.4",
+      content: "create a pull request",
+      planMode: false,
+      onToolRequest: async () => ({}),
+      onApprovalRequest: async (request) => {
+        expect(request.kind).toBe("command_execution")
+        resolveApprovalSeen()
+        return "accept"
+      },
+    })
+
+    await collectStream(turn.stream)
+    await approvalSeen
+    await approvalResponse
+
+    expect(process.messages.find((message: any) => message.id === "late-approval-1")).toEqual({
+      id: "late-approval-1",
+      result: { decision: "accept" },
+    })
+  })
+
   test("interrupt sends turn/interrupt for the active turn", async () => {
     const process = new FakeCodexProcess((message, child) => {
       if (message.method === "initialize") {
