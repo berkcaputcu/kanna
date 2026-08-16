@@ -123,7 +123,7 @@ interface ActiveTurn {
   planMode: boolean
   autoPlan: boolean
   status: KannaStatus
-  pendingTool: PendingToolRequest | null
+  pendingTools: Map<string, PendingToolRequest>
   postToolFollowUp: { content: string; planMode: boolean } | null
   hasFinalResult: boolean
   cancelRequested: boolean
@@ -930,7 +930,7 @@ export class AgentCoordinator {
   }
 
   getPendingTool(chatId: string): PendingToolSnapshot | null {
-    const pending = this.activeTurns.get(chatId)?.pendingTool
+    const pending = this.activeTurns.get(chatId)?.pendingTools.values().next().value
     if (!pending) return null
     return { toolUseId: pending.toolUseId, toolKind: pending.tool.toolKind }
   }
@@ -1348,11 +1348,12 @@ export class AgentCoordinator {
       this.emitStateChange(args.chatId)
 
       return await new Promise<unknown>((resolve) => {
-        active.pendingTool = {
+        const pending = {
           toolUseId: request.tool.toolId,
           tool: request.tool,
           resolve,
         }
+        active.pendingTools.set(pending.toolUseId, pending)
       })
     }
 
@@ -1524,7 +1525,7 @@ export class AgentCoordinator {
       planMode: args.planMode,
       autoPlan: args.autoPlan,
       status: args.provider === "claude" ? "running" : "starting",
-      pendingTool: null,
+      pendingTools: new Map(),
       postToolFollowUp: null,
       hasFinalResult: false,
       cancelRequested: false,
@@ -1918,7 +1919,7 @@ export class AgentCoordinator {
       planMode: session.planMode,
       autoPlan: session.autoPlan,
       status: "running",
-      pendingTool: null,
+      pendingTools: new Map(),
       postToolFollowUp: null,
       hasFinalResult: false,
       cancelRequested: false,
@@ -2252,10 +2253,10 @@ export class AgentCoordinator {
       }
     }
 
-    const pendingTool = active.pendingTool
-    active.pendingTool = null
+    const pendingTools = [...active.pendingTools.values()]
+    active.pendingTools.clear()
 
-    if (pendingTool) {
+    for (const pendingTool of pendingTools) {
       const result = discardedToolResult(pendingTool.tool)
       await this.store.appendMessage(
         chatId,
@@ -2301,14 +2302,18 @@ export class AgentCoordinator {
 
   async respondTool(command: Extract<ClientCommand, { type: "chat.respondTool" }>) {
     const active = this.activeTurns.get(command.chatId)
-    if (!active || !active.pendingTool) {
+    if (!active) {
       throw new Error("No pending tool request")
     }
 
-    const pending = active.pendingTool
-    if (pending.toolUseId !== command.toolUseId) {
+    const pending = active.pendingTools.get(command.toolUseId)
+    if (!pending) {
       throw new Error("Tool response does not match active request")
     }
+
+    // Claim this request before awaiting persistence so duplicate responses
+    // cannot both resolve the same harness request.
+    active.pendingTools.delete(command.toolUseId)
 
     await this.store.appendMessage(
       command.chatId,
@@ -2319,8 +2324,7 @@ export class AgentCoordinator {
       })
     )
 
-    active.pendingTool = null
-    active.status = "running"
+    active.status = active.pendingTools.size > 0 ? "waiting_for_user" : "running"
 
     if (pending.tool.toolKind === "exit_plan_mode") {
       const result = (command.result ?? {}) as {
