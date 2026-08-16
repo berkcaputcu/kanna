@@ -94,6 +94,7 @@ interface PendingTurn {
   turnId: string | null
   model: string
   planMode: boolean
+  startedAt: number
   queue: AsyncQueue<HarnessEvent>
   startedToolIds: Set<string>
   handledDynamicToolIds: Set<string>
@@ -914,6 +915,7 @@ export class CodexAppServerManager {
       turnId: null,
       model: args.model,
       planMode: args.planMode,
+      startedAt: Date.now(),
       queue,
       startedToolIds: new Set(),
       handledDynamicToolIds: new Set(),
@@ -1678,7 +1680,7 @@ export class CodexAppServerManager {
         kind: "result",
         subtype: isCancelled ? "cancelled" : isError ? "error" : "success",
         isError,
-        durationMs: 0,
+        durationMs: Math.max(0, Date.now() - pendingTurn.startedAt),
         result: notification.turn.error?.message ?? "",
       }),
     })

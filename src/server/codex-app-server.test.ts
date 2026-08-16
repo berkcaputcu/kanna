@@ -214,6 +214,50 @@ describe("CodexAppServerManager", () => {
     expect(turnStart?.params.collaborationMode?.settings?.reasoning_effort).toBe("xhigh")
   })
 
+  test("records the elapsed duration when a turn completes", async () => {
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") {
+        child.writeServerMessage({ id: message.id, result: { userAgent: "codex-test" } })
+      } else if (message.method === "thread/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { thread: { id: "thread-1" }, model: "gpt-5.4", reasoningEffort: "high" },
+        })
+      } else if (message.method === "turn/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { turn: { id: "turn-1", status: "inProgress", error: null } },
+        })
+        setTimeout(() => {
+          child.writeServerMessage({
+            method: "turn/completed",
+            params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", error: null } },
+          })
+        }, 10)
+      }
+    })
+
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    await manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
+
+    const turn = await manager.startTurn({
+      chatId: "chat-1",
+      model: "gpt-5.4",
+      content: "Run pwd",
+      planMode: false,
+      onToolRequest: async () => ({}),
+    })
+    const events = await collectStream(turn.stream)
+    const result = events.find((event) => event.type === "transcript" && event.entry.kind === "result")
+
+    if (result?.type !== "transcript" || result.entry.kind !== "result") {
+      throw new Error("Expected a Codex result event")
+    }
+    expect(result.entry.kind).toBe("result")
+    expect(typeof result.entry.durationMs).toBe("number")
+    expect(result.entry.durationMs > 0).toBe(true)
+  })
+
   test("attaches a structured skill item plus system-message failsafe when invoking a skill", async () => {
     const process = new FakeCodexProcess((message, child) => {
       if (message.method === "initialize") {
