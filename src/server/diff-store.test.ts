@@ -225,6 +225,7 @@ describe("DiffStore", () => {
       summary: "Update app",
       description: "Only app changes",
       mode: "commit_only",
+      attributionEnabled: true,
     })
 
     const snapshot = store.getProjectSnapshot("project-1")
@@ -251,6 +252,7 @@ describe("DiffStore", () => {
       summary: "Update app",
       description: `Body text\n\n${KANNA_COMMIT_FOOTER}\n\n${KANNA_COMMIT_TRAILER}`,
       mode: "commit_only",
+      attributionEnabled: true,
     })
 
     const lastMessage = (await run(["git", "log", "-1", "--pretty=%B"], repoRoot)).trim()
@@ -272,10 +274,31 @@ describe("DiffStore", () => {
       summary: "Update app",
       description: `Body text\n\n${KANNA_COMMIT_FOOTER}`,
       mode: "commit_only",
+      attributionEnabled: true,
     })
 
     const lastMessage = (await run(["git", "log", "-1", "--pretty=%B"], repoRoot)).trim()
     expect(lastMessage).toBe(`Update app\n\nBody text\n\n${KANNA_COMMIT_FOOTER}\n\n${KANNA_COMMIT_TRAILER}`)
+  })
+
+  test("does not add Kanna attribution when disabled", async () => {
+    const repoRoot = await createRepo()
+    await writeFile(path.join(repoRoot, "app.txt"), "changed\n")
+
+    const store = new DiffStore(repoRoot)
+    await store.initialize()
+    await store.refreshSnapshot("project-1", repoRoot)
+
+    await store.commitFiles({
+      projectId: "project-1",
+      projectPath: repoRoot,
+      paths: ["app.txt"],
+      summary: "Update app",
+      mode: "commit_only",
+    })
+
+    const lastMessage = (await run(["git", "log", "-1", "--pretty=%B"], repoRoot)).trim()
+    expect(lastMessage).toBe("Update app")
   })
 
   test("commits a deletion that is already staged (e.g. an agent ran git rm)", async () => {

@@ -1481,6 +1481,7 @@ export function createWsRouter({
               summary: command.summary,
               description: command.description,
               mode: command.mode,
+              attributionEnabled: appSettings.getSnapshot().gitAttributionEnabled,
             })
             return { result, changed: result.snapshotChanged }
           })

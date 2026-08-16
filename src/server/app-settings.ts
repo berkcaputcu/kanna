@@ -23,6 +23,7 @@ import {
 
 interface AppSettingsFile {
   analyticsEnabled?: unknown
+  gitAttributionEnabled?: unknown
   analyticsUserId?: unknown
   browserSettingsMigrated?: unknown
   theme?: unknown
@@ -142,6 +143,7 @@ function normalizeEditorCommandTemplate(value: unknown, preset: EditorPreset) {
 function toFilePayload(state: AppSettingsState) {
   return {
     analyticsEnabled: state.analyticsEnabled,
+    gitAttributionEnabled: state.gitAttributionEnabled,
     analyticsUserId: state.analyticsUserId,
     browserSettingsMigrated: state.browserSettingsMigrated,
     theme: state.theme,
@@ -163,6 +165,7 @@ function toSnapshot(state: AppSettingsState, devbox = false): AppSettingsSnapsho
   return {
     devbox,
     analyticsEnabled: state.analyticsEnabled,
+    gitAttributionEnabled: state.gitAttributionEnabled,
     browserSettingsMigrated: state.browserSettingsMigrated,
     theme: state.theme,
     chatSoundPreference: state.chatSoundPreference,
@@ -199,6 +202,11 @@ function normalizeAppSettings(
     warnings.push("analyticsEnabled must be a boolean")
   }
 
+  const gitAttributionEnabled = source?.gitAttributionEnabled === true
+  if (source?.gitAttributionEnabled !== undefined && typeof source.gitAttributionEnabled !== "boolean") {
+    warnings.push("gitAttributionEnabled must be a boolean")
+  }
+
   const rawAnalyticsUserId = typeof source?.analyticsUserId === "string" ? source.analyticsUserId.trim() : ""
   if (source?.analyticsUserId !== undefined && typeof source.analyticsUserId !== "string") {
     warnings.push("analyticsUserId must be a string")
@@ -227,6 +235,7 @@ function normalizeAppSettings(
   const editorPreset = normalizeEditorPreset(source?.editor?.preset)
   const state: AppSettingsState = {
     analyticsEnabled,
+    gitAttributionEnabled,
     analyticsUserId,
     browserSettingsMigrated: source?.browserSettingsMigrated === true,
     theme: normalizeTheme(source?.theme),
@@ -269,6 +278,7 @@ function normalizeAppSettings(
 function toComparablePayload(source: AppSettingsFile) {
   return {
     analyticsEnabled: source.analyticsEnabled,
+    gitAttributionEnabled: source.gitAttributionEnabled,
     analyticsUserId: typeof source.analyticsUserId === "string" ? source.analyticsUserId.trim() : source.analyticsUserId,
     browserSettingsMigrated: source.browserSettingsMigrated,
     theme: source.theme,

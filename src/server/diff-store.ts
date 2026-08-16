@@ -2442,6 +2442,7 @@ export class DiffStore {
     summary: string
     description?: string
     mode: DiffCommitMode
+    attributionEnabled?: boolean
   }) {
     const summary = args.summary.trim()
     const description = args.description?.trim()
@@ -2531,9 +2532,11 @@ export class DiffStore {
     // blank line, which is exactly the placement git wants for a trailer
     // block). Each part is skipped if the author already typed it, so it never
     // doubles up.
-    const attribution = buildKannaCommitAttribution([summary, description].filter(Boolean).join("\n\n"))
-    if (attribution) {
-      commitArgs.push("-m", attribution)
+    if (args.attributionEnabled === true) {
+      const attribution = buildKannaCommitAttribution([summary, description].filter(Boolean).join("\n\n"))
+      if (attribution) {
+        commitArgs.push("-m", attribution)
+      }
     }
     commitArgs.push("--pathspec-from-file=-", "--pathspec-file-nul")
 

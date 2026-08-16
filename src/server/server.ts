@@ -223,6 +223,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     store,
     analytics,
     codexManager,
+    gitAttributionEnabled: () => appSettings.getSnapshot().gitAttributionEnabled,
     onStateChange: (chatId?: string, options?: { immediate?: boolean }) => {
       if (chatId) {
         if (options?.immediate) {

@@ -216,6 +216,7 @@ export function GeneralSection({
     .replaceAll("{line}", "12")
     .replaceAll("{column}", "1")
   const analyticsSettingValue = appSettings?.analyticsEnabled === false ? "disabled" : "enabled"
+  const gitAttributionSettingValue = appSettings?.gitAttributionEnabled === true ? "enabled" : "disabled"
 
   return (
     <>
@@ -433,6 +434,19 @@ export function GeneralSection({
             value={analyticsSettingValue}
             onValueChange={(value) => {
               void handleAnalyticsPreferenceChange(value)
+            }}
+            options={ENABLED_DISABLED_OPTIONS}
+            size="sm"
+          />
+        </SettingsRow>
+
+        <SettingsRow def={SETTINGS_ROWS.gitAttribution}>
+          <SegmentedControl
+            value={gitAttributionSettingValue}
+            onValueChange={(value) => {
+              void handleWriteAppSettings({ gitAttributionEnabled: value === "enabled" }).catch((error) => {
+                setAppSettingsError(error instanceof Error ? error.message : "Unable to save Git attribution settings.")
+              })
             }}
             options={ENABLED_DISABLED_OPTIONS}
             size="sm"

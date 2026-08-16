@@ -157,6 +157,7 @@ interface ClaudeSessionState {
    * correction exists to cover.
    */
   promptAgentId: string
+  attributionEnabled: boolean
   effort?: string
   serviceTier?: "fast"
   planMode: boolean
@@ -187,6 +188,7 @@ interface AgentCoordinatorArgs {
   store: EventStore
   onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
   analytics?: AnalyticsReporter
+  gitAttributionEnabled?: () => boolean
   codexManager?: CodexAppServerManager
   cursorManager?: CursorCliManager
   piManager?: PiAgentManager
@@ -203,6 +205,7 @@ interface AgentCoordinatorArgs {
     forkSession: boolean
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
     onRateLimitEvent?: (info: ClaudeRateLimitInfoRaw) => void
+    attributionEnabled?: boolean
   }) => Promise<ClaudeSessionHandle>
   /**
    * Probe whether a provider's native session artifact still exists on disk.
@@ -668,6 +671,7 @@ async function startClaudeSession(args: {
   forkSession: boolean
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   onRateLimitEvent?: (info: ClaudeRateLimitInfoRaw) => void
+  attributionEnabled?: boolean
 }): Promise<ClaudeSessionHandle> {
   const canUseTool: CanUseTool = async (toolName, input, options) => {
     if (toolName !== "AskUserQuestion" && toolName !== "ExitPlanMode") {
@@ -744,7 +748,9 @@ async function startClaudeSession(args: {
       systemPrompt: {
         type: "preset",
         preset: "claude_code",
-        append: buildKannaAttributionInstructions(buildKannaAgentId("claude", args.model)),
+        append: args.attributionEnabled === true
+          ? buildKannaAttributionInstructions(buildKannaAgentId("claude", args.model))
+          : "",
       },
       // fastMode must go through the flag-settings layer: the CLI only allows
       // fast mode in Agent SDK sessions when flagSettings.fastMode is true,
@@ -831,6 +837,7 @@ export class AgentCoordinator {
   private readonly store: EventStore
   private readonly onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
   private readonly analytics: AnalyticsReporter
+  private readonly gitAttributionEnabled: () => boolean
   private readonly codexManager: CodexAppServerManager
   private readonly cursorManager: CursorCliManager
   private readonly piManager: PiAgentManager
@@ -849,6 +856,7 @@ export class AgentCoordinator {
     this.store = args.store
     this.onStateChange = args.onStateChange
     this.analytics = args.analytics ?? NoopAnalyticsReporter
+    this.gitAttributionEnabled = args.gitAttributionEnabled ?? (() => false)
     this.codexManager = args.codexManager ?? new CodexAppServerManager()
     this.cursorManager = args.cursorManager ?? new CursorCliManager()
     this.piManager = args.piManager ?? new PiAgentManager()
@@ -890,6 +898,7 @@ export class AgentCoordinator {
         sessionToken: null,
         forkSession: false,
         onToolRequest: async () => ({}),
+        attributionEnabled: this.gitAttributionEnabled(),
       })
       return (await probe.getUsage?.()) ?? null
     } catch {
@@ -1402,10 +1411,12 @@ export class AgentCoordinator {
       }
       // Cursor builds its system prompt server-side and exposes no append hook,
       // so its share of the git attribution rides the user-text path instead.
-      cursorContent = appendSystemMessageBlock(
-        cursorContent,
-        buildKannaAttributionSystemMessage(buildKannaAgentId("cursor", args.model))
-      )
+      if (this.gitAttributionEnabled()) {
+        cursorContent = appendSystemMessageBlock(
+          cursorContent,
+          buildKannaAttributionSystemMessage(buildKannaAgentId("cursor", args.model))
+        )
+      }
       // Cursor cannot fork (see canForkChat), so a turn always resumes its own session.
       turn = await this.cursorManager.startTurn({
         cwd: project.localPath,
@@ -1426,6 +1437,7 @@ export class AgentCoordinator {
         sessionToken: chat.pendingForkSessionToken ?? chat.sessionToken,
         forkSession: Boolean(chat.pendingForkSessionToken),
         connection,
+        attributionEnabled: this.gitAttributionEnabled(),
       })
     } else {
       const started = await this.codexManager.startSession({
@@ -1449,6 +1461,7 @@ export class AgentCoordinator {
         effort: args.effort as CodexReasoningEffort | undefined,
         serviceTier: args.serviceTier,
         planMode: args.planMode,
+        attributionEnabled: this.gitAttributionEnabled(),
         onToolRequest,
       })
     }
@@ -1516,7 +1529,7 @@ export class AgentCoordinator {
       const claudeAgentId = buildKannaAgentId("claude", args.model)
       const claudePrompt = buildPromptText(wireContent, args.attachments)
       await session.session.sendPrompt(
-        session.promptAgentId === claudeAgentId
+        !session.attributionEnabled || session.promptAgentId === claudeAgentId
           ? claudePrompt
           : appendSystemMessageBlock(claudePrompt, buildKannaAgentCorrection(claudeAgentId))
       )
@@ -1549,6 +1562,7 @@ export class AgentCoordinator {
       || session.localPath !== args.localPath
       || session.effort !== args.effort
       || session.autoPlan !== args.autoPlan
+      || session.attributionEnabled !== this.gitAttributionEnabled()
       || args.forkSession
     ) {
       if (session) {
@@ -1567,6 +1581,7 @@ export class AgentCoordinator {
         forkSession: args.forkSession,
         onToolRequest: args.onToolRequest,
         onRateLimitEvent: (info) => this.onClaudeRateLimit?.(info),
+        attributionEnabled: this.gitAttributionEnabled(),
       })
       this.refreshClaudeModelCatalog(started)
 
@@ -1577,6 +1592,7 @@ export class AgentCoordinator {
         localPath: args.localPath,
         model: args.model,
         promptAgentId: buildKannaAgentId("claude", args.model),
+        attributionEnabled: this.gitAttributionEnabled(),
         effort: args.effort,
         serviceTier: args.serviceTier,
         planMode: args.planMode,
