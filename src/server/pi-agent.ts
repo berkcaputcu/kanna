@@ -256,6 +256,7 @@ export interface StartPiTurnArgs {
   /** Previous pi session file path to resume, if any. */
   sessionToken: string | null
   forkSession: boolean
+  attributionEnabled?: boolean
   /** Model Registry connection (or env fallback). Null surfaces an error turn. */
   connection: PiConnection | null
 }
@@ -274,6 +275,7 @@ interface PiChatSession {
    * startTurn covers.
    */
   promptAgentId: string
+  attributionEnabled: boolean
   effort: PiReasoningEffort
   connectionProvider: LlmProviderKind
   connectionBaseUrl: string
@@ -389,10 +391,17 @@ export class PiAgentManager {
 
   private async openSession(args: StartPiTurnArgs & { connection: PiConnection }): Promise<PiChatSession> {
     const existing = this.sessions.get(args.chatId)
+    const attributionEnabled = args.attributionEnabled === true
     const connectionUnchanged = existing
       && existing.connectionProvider === args.connection.provider
       && existing.connectionBaseUrl === args.connection.baseUrl
-    if (existing && connectionUnchanged && existing.cwd === args.cwd && !args.forkSession) {
+    if (
+      existing
+      && connectionUnchanged
+      && existing.cwd === args.cwd
+      && existing.attributionEnabled === attributionEnabled
+      && !args.forkSession
+    ) {
       existing.authStorage.setRuntimeApiKey(args.connection.provider, args.connection.apiKey)
       if (existing.model !== args.model) {
         await existing.session.setModel(this.resolveModel(existing.modelRegistry, args.connection, args.model))
@@ -429,7 +438,9 @@ export class PiAgentManager {
       settingsManager,
       noExtensions: true,
       noThemes: true,
-      appendSystemPrompt: [buildKannaAttributionInstructions(buildKannaAgentId("pi", args.model))],
+      appendSystemPrompt: attributionEnabled
+        ? [buildKannaAttributionInstructions(buildKannaAgentId("pi", args.model))]
+        : [],
     })
     await resourceLoader.reload()
 
@@ -460,6 +471,7 @@ export class PiAgentManager {
       cwd: args.cwd,
       model: args.model,
       promptAgentId: buildKannaAgentId("pi", args.model),
+      attributionEnabled,
       effort: args.effort,
       connectionProvider: args.connection.provider,
       connectionBaseUrl: args.connection.baseUrl,
@@ -611,7 +623,7 @@ export class PiAgentManager {
     // resource loader, so the agent id in the system prompt can be stale.
     // Re-state it on the turn text from the drift onward.
     const piAgentId = buildKannaAgentId("pi", args.model)
-    const piContent = chatSession.promptAgentId === piAgentId
+    const piContent = !chatSession.attributionEnabled || chatSession.promptAgentId === piAgentId
       ? args.content
       : appendSystemMessageBlock(args.content, buildKannaAgentCorrection(piAgentId))
 

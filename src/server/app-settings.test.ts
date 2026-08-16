@@ -22,6 +22,7 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
   return {
     devbox: false,
     analyticsEnabled: true,
+    gitAttributionEnabled: false,
     browserSettingsMigrated: false,
     setupShown: false,
     setupCompleted: false,
@@ -247,6 +248,7 @@ describe("AppSettingsManager", () => {
     const snapshot = await manager.writePatch({
       theme: "dark",
       chatSoundId: "glass",
+      gitAttributionEnabled: true,
       terminal: { scrollbackLines: 2_500 },
       editor: { preset: "vscode" },
       providerDefaults: {
@@ -266,6 +268,7 @@ describe("AppSettingsManager", () => {
 
     expect(snapshot.theme).toBe("dark")
     expect(snapshot.chatSoundId).toBe("glass")
+    expect(snapshot.gitAttributionEnabled).toBe(true)
     expect(snapshot.terminal.scrollbackLines).toBe(2_500)
     expect(snapshot.terminal.minColumnWidth).toBe(450)
     expect(snapshot.editor.preset).toBe("vscode")

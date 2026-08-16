@@ -132,6 +132,12 @@ export const SETTINGS_ROWS = defineRows({
     description: "Help improve Kanna with anonymous product analytics.",
     keywords: ["telemetry", "privacy", "tracking"],
   },
+  gitAttribution: {
+    sectionId: "general",
+    title: "Git Attribution",
+    description: "Add Kanna attribution to agent instructions, pull requests, and commits made from the Git panel.",
+    keywords: ["commit", "co-author", "footer", "trailer", "privacy"],
+  },
 
   // Providers
   defaultProvider: {

@@ -169,6 +169,7 @@ export interface StartCodexTurnArgs {
   skill?: { name: string; path: string }
   planMode: boolean
   accessMode?: CodexAccessMode
+  attributionEnabled?: boolean
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   onApprovalRequest?: PendingTurn["onApprovalRequest"]
 }
@@ -956,7 +957,9 @@ export class CodexAppServerManager {
             // Codex's instruction channel is per-turn, not per-session: this is
             // re-sent every turn by design. It appends to the built-in
             // developer message rather than replacing it.
-            developer_instructions: buildKannaAttributionInstructions(buildKannaAgentId("codex", args.model)),
+            developer_instructions: args.attributionEnabled === true
+              ? buildKannaAttributionInstructions(buildKannaAgentId("codex", args.model))
+              : null,
           },
         },
       } satisfies TurnStartParams)
