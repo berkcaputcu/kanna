@@ -244,7 +244,7 @@ are in `protocol`; the implementation is a host concern.
 ### `kanna` — the channel
 
 Everything that makes it Kanna: CLI, updater, nightly, instance lock, cloud
-tunnel + pairing, onboarding, setup wizard, settings, keybindings, analytics,
+tunnel + CLI pairing, onboarding, setup wizard, settings, keybindings, analytics,
 machine name, share tunnel, command palette, sidebar composition,
 `worktree-probe` scheduling, project discovery, the React app shell.
 
@@ -253,7 +253,7 @@ Stays: `cli.ts`, `cli-runtime.ts`, `cli-supervisor.ts`, `restart.ts`,
 `analytics.ts`, `app-settings.ts`, `keybindings.ts`, `discovery.ts`,
 `worktree-probe.ts`, `skills.ts`, `share.ts`,
 `project-quick-actions.ts`, `cloud/*`, and the client's `app/`, `settings/`,
-`auth/`, `cloud/`, `command-palette/`, `KannaSidebar.tsx`, stores, hooks.
+`auth/`, `command-palette/`, `KannaSidebar.tsx`, stores, hooks.
 
 ---
 

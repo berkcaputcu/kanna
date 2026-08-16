@@ -68,7 +68,6 @@ export interface CliRuntimeDeps {
     onMigrationProgress?: (message: string) => void
     trustProxy?: boolean
     cloud?: CloudRuntime | null
-    allowCloudPairing?: boolean
   }) => Promise<{ port: number; stop: () => Promise<void>; analytics?: AnalyticsReporter }>
   fetchLatestVersion: (packageName: string) => Promise<string>
   installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
@@ -417,9 +416,6 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     ...runOptions,
     trustProxy: isShareEnabled(runOptions.share) || cloudRuntime !== null,
     cloud: cloudRuntime,
-    // Unpaired but cloud-capable: the sidebar can claim this machine in one
-    // click and the server attaches the runtime without a restart.
-    allowCloudPairing: cloudEligible && !identity,
     onMigrationProgress: deps.log,
     update: {
       version: deps.version,
