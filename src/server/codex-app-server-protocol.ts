@@ -22,6 +22,7 @@ export interface InitializeParams {
   }
   capabilities: {
     experimentalApi: boolean
+    extensions?: Record<string, unknown>
   }
 }
 
@@ -285,6 +286,65 @@ export interface FileChangeRequestApprovalResponse {
   decision: FileChangeApprovalDecision
 }
 
+export interface PermissionProfile {
+  network?: {
+    enabled?: boolean
+  } | null
+  fileSystem?: {
+    read?: string[]
+    write?: string[]
+  } | null
+}
+
+export interface PermissionsRequestApprovalParams {
+  threadId: string
+  turnId: string
+  itemId: string
+  environmentId?: string | null
+  cwd?: string | null
+  reason?: string | null
+  permissions: PermissionProfile
+}
+
+export interface PermissionsRequestApprovalResponse {
+  scope?: "turn" | "session"
+  permissions: PermissionProfile
+}
+
+export interface McpServerElicitationFormRequest {
+  mode: "form" | "openai/form"
+  message: string
+  requestedSchema: Record<string, unknown>
+  meta?: Record<string, unknown> | null
+}
+
+export interface McpServerElicitationUrlRequest {
+  mode: "url"
+  message: string
+  url: string
+  elicitationId: string
+  meta?: Record<string, unknown> | null
+}
+
+export type McpServerElicitationRequest =
+  | McpServerElicitationFormRequest
+  | McpServerElicitationUrlRequest
+
+export interface McpServerElicitationRequestParams {
+  threadId: string
+  turnId: string | null
+  serverName: string
+  request: McpServerElicitationRequest
+}
+
+export type McpServerElicitationAction = "accept" | "decline" | "cancel"
+
+export interface McpServerElicitationRequestResponse {
+  action: McpServerElicitationAction
+  content?: Record<string, unknown> | null
+  meta?: Record<string, unknown> | null
+}
+
 export interface ToolRequestUserInputRequest {
   id: CodexRequestId
   method: "item/tool/requestUserInput"
@@ -328,11 +388,25 @@ export interface FileChangeRequestApprovalRequest {
   params: FileChangeRequestApprovalParams
 }
 
+export interface McpServerElicitationRequestRequest {
+  id: CodexRequestId
+  method: "mcpServer/elicitation/request"
+  params: McpServerElicitationRequestParams
+}
+
+export interface PermissionsRequestApprovalRequest {
+  id: CodexRequestId
+  method: "item/permissions/requestApproval"
+  params: PermissionsRequestApprovalParams
+}
+
 export type ServerRequest =
   | ToolRequestUserInputRequest
   | DynamicToolCallRequest
   | CommandExecutionRequestApprovalRequest
   | FileChangeRequestApprovalRequest
+  | PermissionsRequestApprovalRequest
+  | McpServerElicitationRequestRequest
 
 export interface UserMessageItem {
   type: "userMessage"
@@ -536,6 +610,8 @@ export function isServerRequest(value: unknown): value is ServerRequest {
     || candidate.method === "item/tool/call"
     || candidate.method === "item/commandExecution/requestApproval"
     || candidate.method === "item/fileChange/requestApproval"
+    || candidate.method === "item/permissions/requestApproval"
+    || candidate.method === "mcpServer/elicitation/request"
 }
 
 export function isServerNotification(value: unknown): value is ServerNotification {

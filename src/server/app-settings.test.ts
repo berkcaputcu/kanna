@@ -208,7 +208,7 @@ describe("AppSettingsManager", () => {
       editor: { preset: "vscode" },
       providerDefaults: {
         codex: {
-          modelOptions: { reasoningEffort: "high", fastMode: true },
+          modelOptions: { reasoningEffort: "high", fastMode: true, accessMode: "approval" },
         },
       },
     })
@@ -217,7 +217,7 @@ describe("AppSettingsManager", () => {
       chatSoundId: string
       terminal: { scrollbackLines: number; minColumnWidth: number }
       editor: { preset: string; commandTemplate: string }
-      providerDefaults: { codex: { modelOptions: { fastMode: boolean } } }
+      providerDefaults: { codex: { modelOptions: { fastMode: boolean; accessMode?: string } } }
     }
 
     expect(snapshot.theme).toBe("dark")
@@ -228,6 +228,7 @@ describe("AppSettingsManager", () => {
     expect(snapshot.editor.preset).toBe("vscode")
     expect(snapshot.editor.commandTemplate).toBe("cursor {path}")
     expect(snapshot.providerDefaults.codex.modelOptions.fastMode).toBe(true)
+    expect(snapshot.providerDefaults.codex.modelOptions.accessMode).toBe("approval")
     expect(nextPayload.theme).toBe("dark")
     expect(nextPayload.chatSoundId).toBe("glass")
 

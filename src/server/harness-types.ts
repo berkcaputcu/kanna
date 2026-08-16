@@ -7,7 +7,15 @@ export interface HarnessEvent {
 }
 
 export interface HarnessToolRequest {
-  tool: NormalizedToolCall & { toolKind: "ask_user_question" | "exit_plan_mode" }
+  tool: NormalizedToolCall & {
+    toolKind:
+      | "ask_user_question"
+      | "exit_plan_mode"
+      | "codex_command_approval"
+      | "codex_file_change_approval"
+      | "codex_mcp_approval"
+      | "codex_permissions_approval"
+  }
 }
 
 export interface HarnessTurn {
