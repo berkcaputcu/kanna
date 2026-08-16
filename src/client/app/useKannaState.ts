@@ -242,6 +242,7 @@ export interface KannaState {
     clearContext?: boolean,
     message?: string
   ) => Promise<void>
+  handleCodexApproval: (toolUseId: string, decision: "accept" | "acceptForSession" | "decline") => Promise<void>
 }
 
 export function useKannaState(activeChatId: string | null): KannaState {
@@ -844,6 +845,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleRenameProject,
     handleAskUserQuestion,
     handleExitPlanMode,
+    handleCodexApproval,
     handleCopyPath,
     handleOpenExternal,
     handleOpenLocalLink,
@@ -949,5 +951,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleCompose,
     handleAskUserQuestion,
     handleExitPlanMode,
+    handleCodexApproval,
   }
 }

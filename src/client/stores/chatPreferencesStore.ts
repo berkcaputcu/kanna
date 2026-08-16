@@ -96,6 +96,15 @@ function cloneComposerState(state: ComposerState): ComposerState {
   return { ...state, modelOptions: { ...state.modelOptions } } as ComposerState
 }
 
+function codexModelOptionsForMode(
+  modelOptions: CodexModelOptions,
+  mode: ChatMode,
+): CodexModelOptions {
+  if (mode === "approval") return { ...modelOptions, accessMode: "approval" }
+  const { accessMode: _accessMode, ...rest } = modelOptions
+  return rest
+}
+
 function sameComposerState(left: ComposerState | undefined, right: ComposerState): boolean {
   if (!left || left.provider !== right.provider) return false
   if (left.model !== right.model || left.planMode !== right.planMode) return false
@@ -325,6 +334,9 @@ export const useChatPreferencesStore = create<ChatPreferencesState>()(
             [provider]: {
               ...state.providerDefaults[provider],
               ...chatModeToFlags(mode, state.providerDefaults[provider].autoPlan),
+              ...(provider === "codex" ? {
+                modelOptions: codexModelOptionsForMode(state.providerDefaults[provider].modelOptions, mode),
+              } : {}),
             },
           },
         })),
@@ -379,7 +391,10 @@ export const useChatPreferencesStore = create<ChatPreferencesState>()(
         set((state) => withChatComposerState(state, chatId, (composerState) => ({
           ...composerState,
           ...chatModeToFlags(mode, composerState.autoPlan),
-        }))),
+          ...(composerState.provider === "codex" ? {
+            modelOptions: codexModelOptionsForMode(composerState.modelOptions, mode),
+          } : {}),
+        } as ComposerState))),
       clearChatComposerPlanMode: (chatId) =>
         set((state) => withChatComposerState(state, chatId, (composerState) => ({
           ...composerState,

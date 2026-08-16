@@ -2001,4 +2001,77 @@ describe("CodexAppServerManager", () => {
     expect(resultEvent?.entry.subtype).toBe("error")
     expect(resultEvent?.entry.result).toContain("fatal: app-server crashed")
   })
+
+  test("maps approval mode and bridges command approvals", async () => {
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") {
+        child.writeServerMessage({ id: message.id, result: { userAgent: "codex-test" } })
+      } else if (message.method === "thread/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { thread: { id: "thread-approval" }, model: "gpt-5.4", reasoningEffort: "high" },
+        })
+      } else if (message.method === "turn/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { turn: { id: "turn-approval", status: "inProgress", error: null } },
+        })
+        child.writeServerMessage({
+          id: "approval-1",
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-approval",
+            turnId: "turn-approval",
+            itemId: "command-1",
+            command: "touch approved.txt",
+            cwd: "/tmp/project",
+            reason: "The command writes a file",
+          },
+        })
+        child.writeServerMessage({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-approval",
+            turn: { id: "turn-approval", status: "completed", error: null },
+          },
+        })
+      }
+    })
+
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    await manager.startSession({
+      chatId: "chat-approval",
+      cwd: "/tmp/project",
+      model: "gpt-5.4",
+      sessionToken: null,
+      accessMode: "approval",
+    })
+
+    const turn = await manager.startTurn({
+      chatId: "chat-approval",
+      model: "gpt-5.4",
+      content: "create a file",
+      planMode: false,
+      accessMode: "approval",
+      onToolRequest: async () => ({}),
+      onApprovalRequest: async (request) => {
+        expect(request.kind).toBe("command_execution")
+        expect((request.params as { command?: string }).command).toBe("touch approved.txt")
+        return "accept"
+      },
+    })
+
+    const events = await collectStream(turn.stream)
+
+    const threadStart = process.messages.find((message: any) => message.method === "thread/start") as any
+    const turnStart = process.messages.find((message: any) => message.method === "turn/start") as any
+    const approvalResponse = process.messages.find((message: any) => message.id === "approval-1")
+    const approvalToolCall = events.find((event) => event.type === "transcript" && event.entry.kind === "tool_call")
+    expect(threadStart.params).toMatchObject({ approvalPolicy: "on-request", sandbox: "workspace-write" })
+    expect(turnStart.params.approvalPolicy).toBe("on-request")
+    expect(approvalResponse).toEqual({ id: "approval-1", result: { decision: "accept" } })
+    expect(approvalToolCall?.entry.kind).toBe("tool_call")
+    if (!approvalToolCall || approvalToolCall.entry.kind !== "tool_call") throw new Error("missing approval tool call")
+    expect(approvalToolCall.entry.tool.toolKind).toBe("codex_command_approval")
+  })
 })

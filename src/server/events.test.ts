@@ -85,7 +85,13 @@ describe("cloneTranscriptEntriesForClient", () => {
   })
 
   test("keeps interactive kinds whole — call and result — since they render inline", () => {
-    for (const kind of ["ask_user_question", "exit_plan_mode", "todo_write"]) {
+    for (const kind of [
+      "ask_user_question",
+      "exit_plan_mode",
+      "todo_write",
+      "codex_command_approval",
+      "codex_file_change_approval",
+    ]) {
       const [callEntry, resultEntry] = call([
         toolCall(kind, { plan: "p".repeat(5000), payload: { deep: true } }),
         toolResult(kind, { answers: { a: ["yes"] } }),
