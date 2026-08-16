@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { Check, Copy } from "lucide-react"
 import { cn } from "../../lib/utils"
+import { copyTextToClipboard } from "../../lib/clipboard"
 import { Button } from "./button"
 
 interface CopyButtonProps {
@@ -35,15 +36,23 @@ export function CopyButton({
   const [copied, setCopied] = useState(false)
 
   const handleCopy = async () => {
-    if (onCopy) {
-      const didCopy = await onCopy()
-      if (didCopy === false) return
-    } else {
-      if (text === undefined) return
-      await navigator.clipboard.writeText(text)
+    try {
+      let didCopy = false
+
+      if (onCopy) {
+        didCopy = (await onCopy()) !== false
+      } else if (text !== undefined) {
+        didCopy = await copyTextToClipboard(text)
+      }
+
+      if (!didCopy) return
+
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // A clipboard failure should not create an unhandled promise rejection
+      // from the button's fire-and-forget click handler.
     }
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
   }
 
   const label = copied ? copiedTitle ?? title : title
@@ -67,6 +76,7 @@ export function CopyButton({
     <Button
       variant="ghost"
       size="icon"
+      type="button"
       title={label}
       aria-label={label}
       className={cn(
