@@ -394,7 +394,12 @@ const STRUCTURED_RESULT_TOOL_KINDS = new Set(["ask_user_question", "exit_plan_mo
  * travel with the transcript rather than being fetched when a row is opened —
  * there is no row to open. Superset of the structured-result kinds.
  */
-const INLINE_TOOL_KINDS = new Set([...STRUCTURED_RESULT_TOOL_KINDS, "todo_write"])
+const INLINE_TOOL_KINDS = new Set([
+  ...STRUCTURED_RESULT_TOOL_KINDS,
+  "todo_write",
+  "codex_command_approval",
+  "codex_file_change_approval",
+])
 
 /** Strip the raw provider payload; it duplicates `content` and dwarfs it. */
 function withoutDebugRaw<TEntry extends TranscriptEntry>(entry: TEntry) {
@@ -413,7 +418,8 @@ function trimToolCallEntry(entry: Extract<TranscriptEntry, { kind: "tool_call" }
   let dropped = rawInput !== undefined
 
   // Only these five kinds carry input that can grow without bound. The other
-  // ten are already header-sized — a path, a pattern, a query — and travel
+  // interactive and tool kinds are already header-sized — a path, a pattern,
+  // a command, or an approval reason — and travel
   // whole.
   const unbounded: Record<string, readonly string[]> = {
     write_file: ["content"],
@@ -445,7 +451,7 @@ function trimToolCallEntry(entry: Extract<TranscriptEntry, { kind: "tool_call" }
  *
  * Two things are deliberately never dropped:
  *
- * - `ask_user_question` / `exit_plan_mode` / `todo_write` render inline, so
+ * - interactive tool kinds render inline, so
  *   there is no expansion to fetch on. The first two additionally get
  *   `tool_use_result` lifted out of `debugRaw` into `structuredResult`.
  * - `isError` and the entry ids, which is everything a collapsed row and its

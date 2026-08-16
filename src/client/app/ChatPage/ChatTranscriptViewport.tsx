@@ -197,6 +197,7 @@ interface ChatTranscriptViewportProps {
   onOpenLocalLink: KannaState["handleOpenLocalLink"]
   onAskUserQuestionSubmit: KannaState["handleAskUserQuestion"]
   onExitPlanModeConfirm: KannaState["handleExitPlanMode"]
+  onCodexApprovalSubmit?: KannaState["handleCodexApproval"]
   showScrollButton: boolean
   onIsAtEndChange: (isAtEnd: boolean) => void
   scrollToBottom: () => void
@@ -318,6 +319,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   onOpenLocalLink,
   onAskUserQuestionSubmit,
   onExitPlanModeConfirm,
+  onCodexApprovalSubmit,
   showScrollButton,
   onIsAtEndChange,
   scrollToBottom,
@@ -848,7 +850,8 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
                       toolGroupExpanded={row.kind === "tool-group" ? (toolGroupExpanded[row.id] ?? false) : undefined}
                       onToolGroupExpandedChange={handleToolGroupExpandedChange}
                       onAskUserQuestionSubmit={onAskUserQuestionSubmit}
-                      onExitPlanModeConfirm={onExitPlanModeConfirm}
+                       onExitPlanModeConfirm={onExitPlanModeConfirm}
+                       onCodexApprovalSubmit={onCodexApprovalSubmit}
                     />
                   </div>
                 </MessageScrollerItem>

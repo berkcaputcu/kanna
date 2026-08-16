@@ -218,7 +218,17 @@ describe("deriveComposerOptionControls", () => {
         autoPlan: false,
       } as ComposerState,
       codexConfig
-    ).mode).toEqual({ selected: "full-access", options: ["full-access", "plan"] })
+    ).mode).toEqual({ selected: "full-access", options: ["full-access", "approval", "plan"] })
+    expect(deriveComposerOptionControls(
+      {
+        provider: "codex",
+        model: providerDefaults.codex.model,
+        modelOptions: { ...providerDefaults.codex.modelOptions, accessMode: "approval" },
+        planMode: false,
+        autoPlan: false,
+      } as ComposerState,
+      codexConfig
+    ).mode?.selected).toBe("approval")
     // Providers without modes get no selector at all.
     expect(deriveComposerOptionControls(
       { provider: "cursor", model: "composer-2.5", modelOptions: {}, planMode: false, autoPlan: false } as ComposerState,

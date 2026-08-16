@@ -7,6 +7,7 @@ import { SystemMessage, type SessionHandoff, type SessionRestore } from "../comp
 import { AccountInfoMessage } from "../components/messages/AccountInfoMessage"
 import { TextMessage } from "../components/messages/TextMessage"
 import { AskUserQuestionMessage } from "../components/messages/AskUserQuestionMessage"
+import { CodexApprovalMessage } from "../components/messages/CodexApprovalMessage"
 import { ExitPlanModeMessage } from "../components/messages/ExitPlanModeMessage"
 import { TodoWriteMessage } from "../components/messages/TodoWriteMessage"
 import { ToolCallMessage } from "../components/messages/ToolCallMessage"
@@ -41,6 +42,7 @@ export interface ResolvedSingleTranscriptRow {
   isFirstAccount: boolean
   isLatestAskUserQuestion: boolean
   isLatestExitPlanMode: boolean
+  isLatestCodexApproval: boolean
   isLatestTodoWrite: boolean
   hideResult: boolean
   isFinalStatus: boolean
@@ -466,6 +468,7 @@ interface TranscriptSingleRowProps {
   isFirstAccount: boolean
   isLatestAskUserQuestion: boolean
   isLatestExitPlanMode: boolean
+  isLatestCodexApproval: boolean
   isLatestTodoWrite: boolean
   hideResult: boolean
   isFinalStatus: boolean
@@ -476,6 +479,7 @@ interface TranscriptSingleRowProps {
     answers: AskUserQuestionAnswerMap
   ) => void
   onExitPlanModeConfirm: (toolUseId: string, confirmed: boolean, clearContext?: boolean, message?: string) => void
+  onCodexApprovalSubmit?: (toolUseId: string, decision: "accept" | "acceptForSession" | "decline") => void
 }
 
 const TranscriptSingleRow = memo(function TranscriptSingleRow({
@@ -491,12 +495,14 @@ const TranscriptSingleRow = memo(function TranscriptSingleRow({
   isFirstAccount,
   isLatestAskUserQuestion,
   isLatestExitPlanMode,
+  isLatestCodexApproval,
   isLatestTodoWrite,
   hideResult,
   isFinalStatus,
   nextPromptTimestamp,
   onAskUserQuestionSubmit,
   onExitPlanModeConfirm,
+  onCodexApprovalSubmit,
 }: TranscriptSingleRowProps) {
   let rendered: React.ReactNode = null
 
@@ -546,6 +552,17 @@ const TranscriptSingleRow = memo(function TranscriptSingleRow({
               message={message}
               onConfirm={onExitPlanModeConfirm}
               isLatest={isLatestExitPlanMode}
+            />
+          )
+          break
+        }
+        if (message.toolKind === "codex_command_approval" || message.toolKind === "codex_file_change_approval") {
+          rendered = (
+            <CodexApprovalMessage
+              key={message.id}
+              message={message}
+              onSubmit={onCodexApprovalSubmit ?? (() => undefined)}
+              isLatest={isLatestCodexApproval}
             />
           )
           break
@@ -702,7 +719,8 @@ export function buildResolvedTranscriptRows(
       restored: renderState.restored,
       isFirstAccount: renderState.isFirstAccount,
       isLatestAskUserQuestion: item.message.id === latestToolIds.AskUserQuestion,
-      isLatestExitPlanMode: item.message.id === latestToolIds.ExitPlanMode,
+       isLatestExitPlanMode: item.message.id === latestToolIds.ExitPlanMode,
+       isLatestCodexApproval: item.message.id === latestToolIds.CodexApproval,
       isLatestTodoWrite: renderState.isLatestTodoWrite,
       hideResult: renderState.hideResult,
       isFinalStatus: renderState.isFinalStatus,
@@ -735,6 +753,7 @@ interface KannaTranscriptRowProps {
     answers: AskUserQuestionAnswerMap
   ) => void
   onExitPlanModeConfirm: (toolUseId: string, confirmed: boolean, clearContext?: boolean, message?: string) => void
+  onCodexApprovalSubmit?: (toolUseId: string, decision: "accept" | "acceptForSession" | "decline") => void
 }
 
 export const KannaTranscriptRow = memo(function KannaTranscriptRow({
@@ -744,6 +763,7 @@ export const KannaTranscriptRow = memo(function KannaTranscriptRow({
   onToolGroupExpandedChange,
   onAskUserQuestionSubmit,
   onExitPlanModeConfirm,
+  onCodexApprovalSubmit,
 }: KannaTranscriptRowProps) {
   if (row.kind === "tool-group") {
     return (
@@ -772,13 +792,15 @@ export const KannaTranscriptRow = memo(function KannaTranscriptRow({
       restored={row.restored}
       isFirstAccount={row.isFirstAccount}
       isLatestAskUserQuestion={row.isLatestAskUserQuestion}
-      isLatestExitPlanMode={row.isLatestExitPlanMode}
+       isLatestExitPlanMode={row.isLatestExitPlanMode}
+       isLatestCodexApproval={row.isLatestCodexApproval}
       isLatestTodoWrite={row.isLatestTodoWrite}
       hideResult={row.hideResult}
       isFinalStatus={row.isFinalStatus}
       nextPromptTimestamp={row.nextPromptTimestamp}
       onAskUserQuestionSubmit={onAskUserQuestionSubmit}
-      onExitPlanModeConfirm={onExitPlanModeConfirm}
+       onExitPlanModeConfirm={onExitPlanModeConfirm}
+       onCodexApprovalSubmit={onCodexApprovalSubmit}
     />
   )
 }, (prev, next) => {
@@ -789,6 +811,7 @@ export const KannaTranscriptRow = memo(function KannaTranscriptRow({
   if (prev.onToolGroupExpandedChange !== next.onToolGroupExpandedChange) return false
   if (prev.onAskUserQuestionSubmit !== next.onAskUserQuestionSubmit) return false
   if (prev.onExitPlanModeConfirm !== next.onExitPlanModeConfirm) return false
+  if (prev.onCodexApprovalSubmit !== next.onCodexApprovalSubmit) return false
   if (prev.row.kind !== next.row.kind) return false
   if (prev.row.id !== next.row.id) return false
 

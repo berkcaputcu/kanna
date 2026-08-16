@@ -4,6 +4,7 @@ import type {
   AgentProvider,
   ChatAttachment,
   ChatSkillsSnapshot,
+  CodexAccessMode,
   CodexReasoningEffort,
   ContextWindowUsageSnapshot,
   HarnessSkill,
@@ -107,7 +108,9 @@ export function claudeToolset(autoPlan: boolean): string[] {
 
 interface PendingToolRequest {
   toolUseId: string
-  tool: NormalizedToolCall & { toolKind: "ask_user_question" | "exit_plan_mode" }
+  tool: NormalizedToolCall & {
+    toolKind: "ask_user_question" | "exit_plan_mode" | "codex_command_approval" | "codex_file_change_approval"
+  }
   resolve: (result: unknown) => void
 }
 
@@ -325,13 +328,19 @@ export function buildPromptText(content: string, attachments: ChatAttachment[]) 
 }
 
 function discardedToolResult(
-  tool: NormalizedToolCall & { toolKind: "ask_user_question" | "exit_plan_mode" }
+  tool: NormalizedToolCall & {
+    toolKind: "ask_user_question" | "exit_plan_mode" | "codex_command_approval" | "codex_file_change_approval"
+  }
 ) {
   if (tool.toolKind === "ask_user_question") {
     return {
       discarded: true,
       answers: {},
     }
+  }
+
+  if (tool.toolKind === "codex_command_approval" || tool.toolKind === "codex_file_change_approval") {
+    return { decision: "cancel" }
   }
 
   return {
@@ -1038,6 +1047,7 @@ export class AgentCoordinator {
       serviceTier: serviceTierFromModelOptions(modelOptions),
       planMode: catalog.supportsPlanMode ? Boolean(options.planMode) : false,
       autoPlan: catalog.supportsAutoPlanMode ? Boolean(options.autoPlan) : false,
+      accessMode: modelOptions.accessMode,
     }
   }
 
@@ -1068,6 +1078,7 @@ export class AgentCoordinator {
       model: settings.model,
       effort: settings.effort,
       serviceTier: settings.serviceTier,
+      accessMode: settings.accessMode,
       planMode: settings.planMode,
       autoPlan: settings.autoPlan,
       appendUserPrompt: true,
@@ -1167,6 +1178,7 @@ export class AgentCoordinator {
     cwd: string
     model: string
     serviceTier?: "fast"
+    accessMode?: CodexAccessMode
     sessionToken: string | null | undefined
     pendingForkSessionToken: string | null | undefined
   }): Promise<boolean> {
@@ -1189,6 +1201,7 @@ export class AgentCoordinator {
             serviceTier: args.serviceTier,
             sessionToken: args.sessionToken,
             pendingForkSessionToken: null,
+            accessMode: args.accessMode,
           })
           return started?.resumeFellBack === true
         } catch {
@@ -1239,6 +1252,7 @@ export class AgentCoordinator {
     model: string
     effort?: string
     serviceTier?: "fast"
+    accessMode?: CodexAccessMode
     planMode: boolean
     autoPlan: boolean
     appendUserPrompt: boolean
@@ -1302,6 +1316,7 @@ export class AgentCoordinator {
         serviceTier: args.serviceTier,
         sessionToken: chat.sessionToken,
         pendingForkSessionToken: chat.pendingForkSessionToken,
+        accessMode: args.accessMode,
       })
       ? await this.prepareSessionRestore(args.chatId, args.provider, existingMessages)
       : null
@@ -1435,6 +1450,7 @@ export class AgentCoordinator {
         serviceTier: args.serviceTier,
         sessionToken: chat.sessionToken,
         pendingForkSessionToken: chat.pendingForkSessionToken,
+        accessMode: args.accessMode,
       })
       if (chat.pendingForkSessionToken && started?.sessionToken) {
         await this.store.setPendingForkSessionToken(args.chatId, null)
@@ -1449,7 +1465,44 @@ export class AgentCoordinator {
         effort: args.effort as CodexReasoningEffort | undefined,
         serviceTier: args.serviceTier,
         planMode: args.planMode,
+        accessMode: args.accessMode,
         onToolRequest,
+        onApprovalRequest: async (request) => {
+          const tool = request.kind === "command_execution"
+            ? {
+                kind: "tool" as const,
+                toolKind: "codex_command_approval" as const,
+                toolName: "CodexApproval",
+                toolId: String(request.requestId),
+                input: {
+                  command: request.params.command ?? undefined,
+                  cwd: request.params.cwd ?? undefined,
+                  reason: request.params.reason ?? undefined,
+                },
+                rawInput: request.params as unknown as Record<string, unknown>,
+              }
+            : {
+                kind: "tool" as const,
+                toolKind: "codex_file_change_approval" as const,
+                toolName: "CodexApproval",
+                toolId: String(request.requestId),
+                input: {
+                  reason: request.params.reason ?? undefined,
+                  grantRoot: request.params.grantRoot ?? undefined,
+                },
+                rawInput: request.params as unknown as Record<string, unknown>,
+              }
+          const result = await onToolRequest({ tool })
+          const decision = result && typeof result === "object"
+            ? (result as { decision?: unknown }).decision
+            : result
+          return decision === "accept"
+            || decision === "acceptForSession"
+            || decision === "decline"
+            || decision === "cancel"
+            ? decision
+            : "decline"
+        },
       })
     }
 
@@ -1659,6 +1712,7 @@ export class AgentCoordinator {
       model: settings.model,
       effort: settings.effort,
       serviceTier: settings.serviceTier,
+      accessMode: settings.accessMode,
       planMode: settings.planMode,
       autoPlan: settings.autoPlan,
       appendUserPrompt: true,
@@ -2205,7 +2259,7 @@ export class AgentCoordinator {
           content: result,
         })
       )
-      if (active.provider === "codex" && pendingTool.tool.toolKind === "exit_plan_mode") {
+      if (active.provider === "codex") {
         pendingTool.resolve(result)
       }
     }
