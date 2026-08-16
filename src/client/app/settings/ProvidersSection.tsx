@@ -126,7 +126,17 @@ export function ProvidersSection({
   function handleProviderDefaultModeChange(provider: AgentProvider, mode: ChatMode) {
     setProviderDefaultMode(provider, mode)
     const flags = chatModeToFlags(mode, providerDefaults[provider].autoPlan)
-    void handleWriteAppSettings({ providerDefaults: { [provider]: flags } }).catch((error) => {
+    const modelOptions = provider === "codex"
+      ? { accessMode: mode === "approval" ? "approval" as const : "full-access" as const }
+      : undefined
+    void handleWriteAppSettings({
+      providerDefaults: {
+        [provider]: {
+          ...flags,
+          ...(modelOptions ? { modelOptions } : {}),
+        },
+      },
+    }).catch((error) => {
       setProvidersError(error instanceof Error ? error.message : "Unable to save provider settings.")
     })
   }
@@ -289,7 +299,11 @@ export function ProvidersSection({
                   handleProviderDefaultModelOptionsChange("codex", { fastMode: change.fastMode })
                 }
               }}
-              mode={chatModeFromFlags(providerDefaults.codex.planMode, providerDefaults.codex.autoPlan)}
+               mode={chatModeFromFlags(
+                 providerDefaults.codex.planMode,
+                 providerDefaults.codex.autoPlan,
+                 providerDefaults.codex.modelOptions.accessMode,
+               )}
               onModeChange={(mode) => handleProviderDefaultModeChange("codex", mode)}
               includeMode
               className="justify-start flex-wrap"

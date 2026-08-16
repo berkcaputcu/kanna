@@ -4,6 +4,7 @@ import { createInterface } from "node:readline"
 import type { Readable, Writable } from "node:stream"
 import type {
   AskUserQuestionItem,
+  CodexAccessMode,
   CodexReasoningEffort,
   ContextWindowUsageSnapshot,
   ServiceTier,
@@ -122,6 +123,7 @@ interface SessionContext {
   pendingRequests: Map<CodexRequestId, PendingRequest<unknown>>
   pendingTurn: PendingTurn | null
   sessionToken: string | null
+  accessMode: CodexAccessMode
   stderrLines: string[]
   closed: boolean
 }
@@ -133,6 +135,7 @@ export interface StartCodexSessionArgs {
   serviceTier?: ServiceTier
   sessionToken: string | null
   pendingForkSessionToken?: string | null
+  accessMode?: CodexAccessMode
 }
 
 export interface StartCodexTurnArgs {
@@ -150,6 +153,7 @@ export interface StartCodexTurnArgs {
    */
   skill?: { name: string; path: string }
   planMode: boolean
+  accessMode?: CodexAccessMode
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   onApprovalRequest?: PendingTurn["onApprovalRequest"]
 }
@@ -193,6 +197,12 @@ function isRecoverableResumeError(error: unknown): boolean {
   return ["not found", "missing thread", "no such thread", "unknown thread", "does not exist"].some((snippet) =>
     message.includes(snippet)
   )
+}
+
+function codexPolicy(accessMode: CodexAccessMode = "full-access") {
+  return accessMode === "approval"
+    ? { approvalPolicy: "on-request" as const, sandbox: "workspace-write" as const }
+    : { approvalPolicy: "never" as const, sandbox: "danger-full-access" as const }
 }
 
 const MULTI_SELECT_HINT_PATTERN = /\b(all that apply|select all|choose all|pick all|select multiple|choose multiple|pick multiple|multiple selections?|multiple choice|more than one|one or more)\b/i
@@ -743,6 +753,7 @@ export class CodexAppServerManager {
       pendingRequests: new Map(),
       pendingTurn: null,
       sessionToken: null,
+      accessMode: "full-access",
       stderrLines: [],
       closed: false,
     }
@@ -769,8 +780,9 @@ export class CodexAppServerManager {
   }
 
   async startSession(args: StartCodexSessionArgs) {
+    const accessMode = args.accessMode ?? "full-access"
     const existing = this.sessions.get(args.chatId)
-    if (existing && !existing.closed && existing.cwd === args.cwd && !args.pendingForkSessionToken) {
+    if (existing && !existing.closed && existing.cwd === args.cwd && existing.accessMode === accessMode && !args.pendingForkSessionToken) {
       return
     }
 
@@ -786,6 +798,7 @@ export class CodexAppServerManager {
       pendingRequests: new Map(),
       pendingTurn: null,
       sessionToken: null,
+      accessMode,
       stderrLines: [],
       closed: false,
     }
@@ -810,8 +823,7 @@ export class CodexAppServerManager {
       model: args.model,
       cwd: args.cwd,
       serviceTier: args.serviceTier,
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
+      ...codexPolicy(accessMode),
       experimentalRawEvents: false,
       persistExtendedHistory: false,
     } satisfies ThreadStartParams
@@ -827,8 +839,7 @@ export class CodexAppServerManager {
         model: args.model,
         cwd: args.cwd,
         serviceTier: args.serviceTier,
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
+        ...codexPolicy(accessMode),
         persistExtendedHistory: false,
       } satisfies ThreadForkParams)
     } else if (args.sessionToken) {
@@ -838,8 +849,7 @@ export class CodexAppServerManager {
           model: args.model,
           cwd: args.cwd,
           serviceTier: args.serviceTier,
-          approvalPolicy: "never",
-          sandbox: "danger-full-access",
+          ...codexPolicy(accessMode),
           persistExtendedHistory: false,
         } satisfies ThreadResumeParams)
       } catch (error) {
@@ -905,7 +915,7 @@ export class CodexAppServerManager {
       const response = await this.sendRequest<TurnStartResponse>(context, "turn/start", {
         threadId: context.sessionToken ?? "",
         input,
-        approvalPolicy: "never",
+        approvalPolicy: codexPolicy(args.accessMode).approvalPolicy,
         model: args.model,
         effort: args.effort,
         serviceTier: args.serviceTier,
@@ -1221,6 +1231,22 @@ export class CodexAppServerManager {
     }
 
     if (request.method === "item/commandExecution/requestApproval") {
+      const tool = {
+        kind: "tool" as const,
+        toolKind: "codex_command_approval" as const,
+        toolName: "CodexApproval",
+        toolId: String(request.id),
+        input: {
+          command: request.params.command ?? undefined,
+          cwd: request.params.cwd ?? undefined,
+          reason: request.params.reason ?? undefined,
+        },
+        rawInput: request.params as unknown as Record<string, unknown>,
+      }
+      pendingTurn.queue.push({
+        type: "transcript",
+        entry: timestamped({ kind: "tool_call", tool }),
+      })
       const decision = await pendingTurn.onApprovalRequest?.({
         requestId: request.id,
         kind: "command_execution",
@@ -1235,6 +1261,21 @@ export class CodexAppServerManager {
       return
     }
 
+    const tool = {
+      kind: "tool" as const,
+      toolKind: "codex_file_change_approval" as const,
+      toolName: "CodexApproval",
+      toolId: String(request.id),
+      input: {
+        reason: request.params.reason ?? undefined,
+        grantRoot: request.params.grantRoot ?? undefined,
+      },
+      rawInput: request.params as unknown as Record<string, unknown>,
+    }
+    pendingTurn.queue.push({
+      type: "transcript",
+      entry: timestamped({ kind: "tool_call", tool }),
+    })
     const decision = await pendingTurn.onApprovalRequest?.({
       requestId: request.id,
       kind: "file_change",
