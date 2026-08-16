@@ -21,7 +21,6 @@ async function createTempFilePath() {
 function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettingsSnapshot> = {}): AppSettingsSnapshot {
   return {
     devbox: false,
-    analyticsEnabled: true,
     gitAttributionEnabled: false,
     browserSettingsMigrated: false,
     setupShown: false,
@@ -122,7 +121,6 @@ describe("readAppSettingsSnapshot", () => {
     await writeFile(filePath, "{not-json", "utf8")
 
     const snapshot = await readAppSettingsSnapshot(filePath)
-    expect(snapshot.analyticsEnabled).toBe(true)
     expect(snapshot.warning).toContain("invalid JSON")
   })
 
@@ -168,46 +166,6 @@ describe("readAppSettingsSnapshot", () => {
 })
 
 describe("AppSettingsManager", () => {
-  test("creates a settings file with analytics enabled and a stable anonymous id", async () => {
-    const filePath = await createTempFilePath()
-    const manager = new AppSettingsManager(filePath)
-
-    await manager.initialize()
-
-    const payload = JSON.parse(await readFile(filePath, "utf8")) as {
-      analyticsEnabled: boolean
-      analyticsUserId: string
-    }
-    expect(payload.analyticsEnabled).toBe(true)
-    expect(payload.analyticsUserId).toMatch(/^anon_/)
-    expect(manager.getSnapshot()).toEqual(expectedSettingsSnapshot(filePath))
-
-    manager.dispose()
-  })
-
-  test("writes analyticsEnabled without replacing the stored user id", async () => {
-    const filePath = await createTempFilePath()
-    const manager = new AppSettingsManager(filePath)
-
-    await manager.initialize()
-    const initialPayload = JSON.parse(await readFile(filePath, "utf8")) as {
-      analyticsEnabled: boolean
-      analyticsUserId: string
-    }
-
-    const snapshot = await manager.write({ analyticsEnabled: false })
-    const nextPayload = JSON.parse(await readFile(filePath, "utf8")) as {
-      analyticsEnabled: boolean
-      analyticsUserId: string
-    }
-
-    expect(snapshot).toEqual(expectedSettingsSnapshot(filePath, { analyticsEnabled: false }))
-    expect(nextPayload.analyticsEnabled).toBe(false)
-    expect(nextPayload.analyticsUserId).toBe(initialPayload.analyticsUserId)
-
-    manager.dispose()
-  })
-
   test("persists setup-wizard markers across restarts so onboarding is per machine", async () => {
     const filePath = await createTempFilePath()
     const manager = new AppSettingsManager(filePath)
@@ -236,15 +194,11 @@ describe("AppSettingsManager", () => {
     reopened.dispose()
   })
 
-  test("patches expanded settings without replacing the stored user id", async () => {
+  test("patches expanded settings without losing unrelated settings", async () => {
     const filePath = await createTempFilePath()
     const manager = new AppSettingsManager(filePath)
 
     await manager.initialize()
-    const initialPayload = JSON.parse(await readFile(filePath, "utf8")) as {
-      analyticsUserId: string
-    }
-
     const snapshot = await manager.writePatch({
       theme: "dark",
       chatSoundId: "glass",
@@ -258,7 +212,6 @@ describe("AppSettingsManager", () => {
       },
     })
     const nextPayload = JSON.parse(await readFile(filePath, "utf8")) as {
-      analyticsUserId: string
       theme: string
       chatSoundId: string
       terminal: { scrollbackLines: number; minColumnWidth: number }
@@ -274,7 +227,6 @@ describe("AppSettingsManager", () => {
     expect(snapshot.editor.preset).toBe("vscode")
     expect(snapshot.editor.commandTemplate).toBe("cursor {path}")
     expect(snapshot.providerDefaults.codex.modelOptions.fastMode).toBe(true)
-    expect(nextPayload.analyticsUserId).toBe(initialPayload.analyticsUserId)
     expect(nextPayload.theme).toBe("dark")
     expect(nextPayload.chatSoundId).toBe("glass")
 

@@ -1360,21 +1360,14 @@ describe("AgentCoordinator codex integration", () => {
 })
 
 describe("AgentCoordinator claude integration", () => {
-  test("tracks analytics for new chats, queued messages, and forks", async () => {
+  test("creates, queues, and forks chats", async () => {
     const events = new AsyncEventQueue<any>()
-    const analyticsEvents: string[] = []
     const store = createFakeStore()
     store.chat.provider = "claude"
     store.chat.sessionToken = "session-1"
 
     const coordinator = new AgentCoordinator({
       store: store as never,
-      analytics: {
-        track: (eventName: string) => {
-          analyticsEvents.push(eventName)
-        },
-        trackLaunch: () => {},
-      },
       onStateChange: () => {},
       startClaudeSession: async () => ({
         provider: "claude",
@@ -1414,13 +1407,6 @@ describe("AgentCoordinator claude integration", () => {
     })
 
     await coordinator.forkChat("chat-1")
-
-    expect(analyticsEvents).toEqual([
-      "chat_created",
-      "message_sent",
-      "message_sent",
-      "chat_created",
-    ])
 
     events.close()
   })

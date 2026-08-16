@@ -10,7 +10,6 @@ import { PROD_SERVER_PORT } from "../shared/ports"
 import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 import { logShareDetails, renderTerminalQr, startShareTunnel, type StartedShareTunnel } from "./share"
 import { probeExistingInstance, type ExistingInstance } from "./instance"
-import type { AnalyticsReporter } from "./analytics"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
 import { readCloudIdentity, type CloudIdentity } from "./cloud/identity"
 import { runPairCommand, type PairCommandArgs, type PairAction } from "./cloud/pair-command"
@@ -68,7 +67,7 @@ export interface CliRuntimeDeps {
     onMigrationProgress?: (message: string) => void
     trustProxy?: boolean
     cloud?: CloudRuntime | null
-  }) => Promise<{ port: number; stop: () => Promise<void>; analytics?: AnalyticsReporter }>
+  }) => Promise<{ port: number; stop: () => Promise<void> }>
   fetchLatestVersion: (packageName: string) => Promise<string>
   installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
   installNightly?: () => Promise<NightlyInstallResult>
@@ -473,7 +472,6 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
       log: (message) => deps.log(`${LOG_PREFIX} ${message}`),
       warn: (message) => deps.warn(`${LOG_PREFIX} ${message}`),
       onTunnelUp: (kind) => {
-        started.analytics?.track(kind === "started" ? "cloud_tunnel_started" : "cloud_tunnel_recovered")
         if (openHostedOnConnect && !openedHosted) {
           openedHosted = true
           deps.openUrl(runtime.identity.appOrigin)

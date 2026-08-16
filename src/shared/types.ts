@@ -1020,7 +1020,6 @@ export interface GitHubRecentReposResult {
 }
 
 export interface AppSettingsSnapshot {
-  analyticsEnabled: boolean
   /** Add Kanna attribution to agent instructions, pull requests, and Git sidebar commits. */
   gitAttributionEnabled: boolean
   browserSettingsMigrated: boolean
@@ -1062,7 +1061,6 @@ export interface AppSettingsSnapshot {
 }
 
 export interface AppSettingsPatch {
-  analyticsEnabled?: boolean
   gitAttributionEnabled?: boolean
   browserSettingsMigrated?: boolean
   theme?: AppThemePreference
