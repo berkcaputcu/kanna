@@ -2,41 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { UpdateManager } from "./update-manager"
 
 describe("UpdateManager", () => {
-  test("tracks update lifecycle events", async () => {
-    const events: Array<{ name: string; properties?: Record<string, unknown> }> = []
-    const manager = new UpdateManager({
-      currentVersion: "0.12.0",
-      fetchLatestVersion: async () => "0.13.0",
-      installVersion: () => ({
-        ok: true,
-        errorCode: null,
-        userTitle: null,
-        userMessage: null,
-      }),
-      trackEvent: (eventName, properties) => {
-        events.push({ name: eventName, properties })
-      },
-    })
-
-    await manager.checkForUpdates({ force: true })
-    await manager.installUpdate()
-
-    expect(events).toEqual([
-      {
-        name: "update_checked",
-        properties: {
-          latest_version: "0.13.0",
-        },
-      },
-      {
-        name: "update_installed",
-        properties: {
-          latest_version: "0.13.0",
-        },
-      },
-    ])
-  })
-
   test("detects available updates", async () => {
     const manager = new UpdateManager({
       currentVersion: "0.12.0",
@@ -112,7 +77,6 @@ describe("UpdateManager", () => {
   })
 
   test("installNightly builds main and moves to restart_pending with the stamped version", async () => {
-    const events: Array<{ name: string; properties?: Record<string, unknown> }> = []
     const manager = new UpdateManager({
       currentVersion: "0.56.7",
       fetchLatestVersion: async () => "0.56.7",
@@ -124,9 +88,6 @@ describe("UpdateManager", () => {
         userMessage: null,
         version: "0.56.7-nightly.abc1234",
       }),
-      trackEvent: (eventName, properties) => {
-        events.push({ name: eventName, properties })
-      },
     })
 
     const result = await manager.installNightly()
@@ -135,9 +96,6 @@ describe("UpdateManager", () => {
     expect(manager.getSnapshot().status).toBe("restart_pending")
     expect(manager.getSnapshot().currentVersion).toBe("0.56.7-nightly.abc1234")
     expect(typeof manager.getSnapshot().reloadRequestedAt).toBe("number")
-    expect(events).toEqual([
-      { name: "update_nightly_installed", properties: { nightly_version: "0.56.7-nightly.abc1234" } },
-    ])
   })
 
   test("installNightly surfaces build failures without touching the running version", async () => {

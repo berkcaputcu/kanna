@@ -4,8 +4,6 @@ import { PROTOCOL_VERSION } from "../shared/types"
 import type { ClientEnvelope, ServerEnvelope, SubscriptionTopic } from "../shared/protocol"
 import { isClientEnvelope } from "../shared/protocol"
 import type { AgentCoordinator } from "./agent"
-import type { AnalyticsReporter } from "./analytics"
-import { NoopAnalyticsReporter } from "./analytics"
 import type { AppSettingsManager } from "./app-settings"
 import type { DiscoveredProject } from "./discovery"
 import { DiffStore } from "./diff-store"
@@ -13,7 +11,7 @@ import { EventStore } from "./event-store"
 import { openExternal } from "./external-open"
 import { KeybindingsManager } from "./keybindings"
 import { killLocalHttpServer, listLocalHttpServers } from "./local-http-servers"
-import { cloneRepository, createDirectory, ensureProjectDirectory, initializeProjectDirectory, listDirectory, resolveClonePath, resolveLocalPath } from "./paths"
+import { cloneRepository, createDirectory, ensureProjectDirectory, initializeProjectDirectory, listDirectory, resolveClonePath } from "./paths"
 import { listRecentGitHubRepos } from "./github"
 import { applyPiFaveModels } from "./provider-catalog"
 import { readProjectQuickActions, writeProjectQuickActions } from "./project-quick-actions"
@@ -71,8 +69,7 @@ interface CreateWsRouterArgs {
   agent: AgentCoordinator
   terminals: TerminalManager
   keybindings: KeybindingsManager
-  appSettings: Pick<AppSettingsManager, "getSnapshot" | "write" | "writePatch" | "onChange">
-  analytics?: AnalyticsReporter
+  appSettings: Pick<AppSettingsManager, "getSnapshot" | "writePatch" | "onChange">
   llmProvider: {
     read: () => Promise<LlmProviderSnapshot>
     write: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl"> & Partial<Pick<LlmProviderSnapshot, "faveModels">>) => Promise<LlmProviderSnapshot>
@@ -165,7 +162,6 @@ export function createWsRouter({
   terminals,
   keybindings,
   appSettings,
-  analytics,
   llmProvider,
   refreshDiscovery,
   getDiscoveredProjects,
@@ -179,8 +175,6 @@ export function createWsRouter({
   let pendingBroadcastAll = false
   const pendingBroadcastChatIds = new Set<string>()
   let pendingSidebarTimer: ReturnType<typeof setTimeout> | null = null
-  const resolvedAnalytics = analytics ?? NoopAnalyticsReporter
-
   function getProtectedChatIds() {
     const activeStatuses = agent.getActiveStatuses()
     const drainingChatIds = typeof agent.getDrainingChatIds === "function"
@@ -1044,28 +1038,9 @@ export function createWsRouter({
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           return
         }
-        case "settings.writeAppSettings": {
-          const previousAnalyticsEnabled = appSettings.getSnapshot().analyticsEnabled
-          if (previousAnalyticsEnabled && !command.analyticsEnabled) {
-            resolvedAnalytics.track("analytics_disabled")
-          }
-          const snapshot = await appSettings.write({ analyticsEnabled: command.analyticsEnabled })
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
-          if (!previousAnalyticsEnabled && command.analyticsEnabled) {
-            resolvedAnalytics.track("analytics_enabled")
-          }
-          return
-        }
         case "settings.writeAppSettingsPatch": {
-          const previousAnalyticsEnabled = appSettings.getSnapshot().analyticsEnabled
           const snapshot = await appSettings.writePatch(command.patch)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
-          if (command.patch.analyticsEnabled !== undefined && previousAnalyticsEnabled && !snapshot.analyticsEnabled) {
-            resolvedAnalytics.track("analytics_disabled")
-          }
-          if (command.patch.analyticsEnabled !== undefined && !previousAnalyticsEnabled && snapshot.analyticsEnabled) {
-            resolvedAnalytics.track("analytics_enabled")
-          }
           return
         }
         case "settings.readLlmProvider": {
@@ -1133,26 +1108,17 @@ export function createWsRouter({
         }
         case "project.open": {
           await ensureProjectDirectory(command.localPath)
-          const normalizedPath = resolveLocalPath(command.localPath)
-          const existingProjectId = store.state.projectIdsByPath.get(normalizedPath)
           const project = await store.openProject(command.localPath)
           await refreshDiscovery()
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id } })
-          if (!existingProjectId) {
-            resolvedAnalytics.track("project_opened")
-          }
           await broadcastFilteredSnapshots({ includeSidebar: true, includeLocalProjects: true })
           return
         }
         case "project.create": {
           const resolved = await initializeProjectDirectory(command.localPath)
-          const existingProjectId = store.state.projectIdsByPath.get(resolved)
           const project = await store.openProject(resolved, command.title)
           await refreshDiscovery()
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { projectId: project.id, localPath: resolved } })
-          if (!existingProjectId) {
-            resolvedAnalytics.track("project_opened")
-          }
           await broadcastFilteredSnapshots({ includeSidebar: true, includeLocalProjects: true })
           return
         }
@@ -1179,7 +1145,6 @@ export function createWsRouter({
         case "project.remove": {
           await store.removeProject(command.projectId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
-          resolvedAnalytics.track("project_removed")
           // Removing a project tombstones its chats too, so subscribers of any
           // topic may need fresh state.
           await broadcastSnapshots()
@@ -1211,7 +1176,6 @@ export function createWsRouter({
         case "chat.create": {
           const chat = await store.createChat(command.projectId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { chatId: chat.id } })
-          resolvedAnalytics.track("chat_created")
           // Adding a chat changes local-projects too (chatCount/lastOpenedAt).
           await broadcastFilteredSnapshots({
             includeSidebar: true,
@@ -1273,7 +1237,6 @@ export function createWsRouter({
           await agent.closeChat(command.chatId)
           await store.deleteChat(command.chatId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
-          resolvedAnalytics.track("chat_deleted")
           // The deleted chat's own topic must refresh (to null) so another tab
           // viewing it learns it's gone, and local-projects loses the chat.
           await broadcastFilteredSnapshots({

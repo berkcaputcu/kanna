@@ -14,7 +14,6 @@ import type { CloudRuntime } from "./cloud"
 import { EventStore } from "./event-store"
 import { AgentCoordinator } from "./agent"
 import { CodexAppServerManager } from "./codex-app-server"
-import { KannaAnalyticsReporter } from "./analytics"
 import { AppSettingsManager } from "./app-settings"
 import { UsageLimitsManager } from "./usage-limits"
 import { DiffStore } from "./diff-store"
@@ -190,11 +189,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const appSettings = new AppSettingsManager(path.join(store.dataDir, "settings.json"), { devbox: devboxUi })
   await appSettings.initialize()
   await keybindings.initialize()
-  const analytics = new KannaAnalyticsReporter({
-    settings: appSettings,
-    currentVersion: options.update?.version ?? "unknown",
-    environment: runtimeProfile === "dev" ? "dev" : "prod",
-  })
   const updateManager = options.update
     ? new UpdateManager({
       currentVersion: options.update.version,
@@ -202,13 +196,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       installVersion: options.update.installVersion,
       installNightly: options.update.installNightly,
       devMode: runtimeProfile === "dev",
-      trackEvent: analytics.track.bind(analytics),
     })
     : null
   const codexManager = new CodexAppServerManager()
   const agent = new AgentCoordinator({
     store,
-    analytics,
     codexManager,
     gitAttributionEnabled: () => appSettings.getSnapshot().gitAttributionEnabled,
     onStateChange: (chatId?: string, options?: { immediate?: boolean }) => {
@@ -236,7 +228,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     readLlmProvider: readLlmProviderSnapshot,
     writeLlmProvider: writeLlmProviderSnapshot,
     fetchLatestNpmVersion: fetchLatestPackageVersion,
-    trackEvent: analytics.track.bind(analytics),
     onSignedIn: (service) => {
       // A fresh sign-in unlocks usage limits (claude/codex empty-state cards
       // flip from auth → usage) and the live Cursor model catalog.
@@ -260,7 +251,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     terminals,
     keybindings,
     appSettings,
-    analytics,
     usageLimits,
     llmProvider: {
       read: readLlmProviderSnapshot,
@@ -528,16 +518,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     }
   }
 
-  analytics.trackLaunch({
-    port: actualPort,
-    host: hostname,
-    openBrowser: options.openBrowser ?? true,
-    share: options.share ?? false,
-    password: options.password ?? null,
-    strictPort,
-    cloud: Boolean(options.cloud),
-  })
-
   const shutdown = async () => {
     clearInterval(staleEmptyChatPruneInterval)
     clearInterval(staleChatAutoArchiveInterval)
@@ -561,7 +541,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     store,
     diffStore,
     updateManager,
-    analytics,
     stop: shutdown,
   }
 }

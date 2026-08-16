@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto"
 import { watch, type FSWatcher } from "node:fs"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -22,9 +21,7 @@ import {
 } from "../shared/types"
 
 interface AppSettingsFile {
-  analyticsEnabled?: unknown
   gitAttributionEnabled?: unknown
-  analyticsUserId?: unknown
   browserSettingsMigrated?: unknown
   theme?: unknown
   chatSoundPreference?: unknown
@@ -53,9 +50,7 @@ interface AppSettingsFile {
 }
 
 // devbox is a server-runtime fact (the --cloud flag), not settings state.
-interface AppSettingsState extends Omit<AppSettingsSnapshot, "devbox"> {
-  analyticsUserId: string
-}
+type AppSettingsState = Omit<AppSettingsSnapshot, "devbox">
 
 interface NormalizedAppSettings {
   payload: AppSettingsState
@@ -72,10 +67,6 @@ const MAX_TERMINAL_MIN_COLUMN_WIDTH = 900
 const DEFAULT_EDITOR_PRESET: EditorPreset = "cursor"
 const DEFAULT_CHAT_SOUND_PREFERENCE: ChatSoundPreference = "always"
 const DEFAULT_CHAT_SOUND_ID: ChatSoundId = "funk"
-
-function createAnalyticsUserId() {
-  return `anon_${randomUUID()}`
-}
 
 function getDefaultEditorCommandTemplate(preset: EditorPreset) {
   switch (preset) {
@@ -142,9 +133,7 @@ function normalizeEditorCommandTemplate(value: unknown, preset: EditorPreset) {
 
 function toFilePayload(state: AppSettingsState) {
   return {
-    analyticsEnabled: state.analyticsEnabled,
     gitAttributionEnabled: state.gitAttributionEnabled,
-    analyticsUserId: state.analyticsUserId,
     browserSettingsMigrated: state.browserSettingsMigrated,
     theme: state.theme,
     chatSoundPreference: state.chatSoundPreference,
@@ -164,7 +153,6 @@ function toFilePayload(state: AppSettingsState) {
 function toSnapshot(state: AppSettingsState, devbox = false): AppSettingsSnapshot {
   return {
     devbox,
-    analyticsEnabled: state.analyticsEnabled,
     gitAttributionEnabled: state.gitAttributionEnabled,
     browserSettingsMigrated: state.browserSettingsMigrated,
     theme: state.theme,
@@ -197,23 +185,9 @@ function normalizeAppSettings(
     warnings.push("Settings file must contain a JSON object")
   }
 
-  const analyticsEnabled = typeof source?.analyticsEnabled === "boolean" ? source.analyticsEnabled : true
-  if (source?.analyticsEnabled !== undefined && typeof source.analyticsEnabled !== "boolean") {
-    warnings.push("analyticsEnabled must be a boolean")
-  }
-
   const gitAttributionEnabled = source?.gitAttributionEnabled === true
   if (source?.gitAttributionEnabled !== undefined && typeof source.gitAttributionEnabled !== "boolean") {
     warnings.push("gitAttributionEnabled must be a boolean")
-  }
-
-  const rawAnalyticsUserId = typeof source?.analyticsUserId === "string" ? source.analyticsUserId.trim() : ""
-  if (source?.analyticsUserId !== undefined && typeof source.analyticsUserId !== "string") {
-    warnings.push("analyticsUserId must be a string")
-  }
-  const analyticsUserId = rawAnalyticsUserId || createAnalyticsUserId()
-  if (!rawAnalyticsUserId && source?.analyticsUserId !== undefined) {
-    warnings.push("analyticsUserId must be a non-empty string")
   }
 
   // New Sidebar ships enabled; an explicit false opts back into the legacy sidebar.
@@ -234,9 +208,7 @@ function normalizeAppSettings(
 
   const editorPreset = normalizeEditorPreset(source?.editor?.preset)
   const state: AppSettingsState = {
-    analyticsEnabled,
     gitAttributionEnabled,
-    analyticsUserId,
     browserSettingsMigrated: source?.browserSettingsMigrated === true,
     theme: normalizeTheme(source?.theme),
     chatSoundPreference: normalizeChatSoundPreference(source?.chatSoundPreference),
@@ -277,9 +249,7 @@ function normalizeAppSettings(
 
 function toComparablePayload(source: AppSettingsFile) {
   return {
-    analyticsEnabled: source.analyticsEnabled,
     gitAttributionEnabled: source.gitAttributionEnabled,
-    analyticsUserId: typeof source.analyticsUserId === "string" ? source.analyticsUserId.trim() : source.analyticsUserId,
     browserSettingsMigrated: source.browserSettingsMigrated,
     theme: source.theme,
     chatSoundPreference: source.chatSoundPreference,
@@ -384,10 +354,6 @@ export class AppSettingsManager {
   async reload(options?: { persistNormalized?: boolean }) {
     const nextState = await this.readState(options)
     this.setState(nextState)
-  }
-
-  async write(value: { analyticsEnabled: boolean }) {
-    return this.writePatch({ analyticsEnabled: value.analyticsEnabled })
   }
 
   async writePatch(patch: AppSettingsPatch) {
