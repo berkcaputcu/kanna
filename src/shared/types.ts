@@ -1474,6 +1474,17 @@ export interface CodexMcpApprovalToolCall
     persist?: "session" | "always" | Array<"session" | "always">
   }> { }
 
+export interface CodexPermissionsApprovalToolCall
+  extends ToolCallBase<"codex_permissions_approval", {
+    reason?: string
+    cwd?: string
+    environmentId?: string
+    permissions: {
+      network?: { enabled?: boolean } | null
+      fileSystem?: { read?: string[]; write?: string[] } | null
+    }
+  }> { }
+
 export interface McpGenericToolCall
   extends ToolCallBase<"mcp_generic", { server: string; tool: string; payload?: Record<string, unknown> }> { }
 
@@ -1497,6 +1508,7 @@ export type NormalizedToolCall =
   | CodexCommandApprovalToolCall
   | CodexFileChangeApprovalToolCall
   | CodexMcpApprovalToolCall
+  | CodexPermissionsApprovalToolCall
   | McpGenericToolCall
   | UnknownToolCall
 
@@ -2025,4 +2037,5 @@ export interface PendingToolSnapshot {
     | "codex_command_approval"
     | "codex_file_change_approval"
     | "codex_mcp_approval"
+    | "codex_permissions_approval"
 }
