@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { Archive, Code, Copy, EyeOff, FolderOpen, Github, Pencil, PencilOff, RotateCcw, Split, SquarePen, Trash2, UserRoundPlus } from "lucide-react"
+import { Archive, Code, Copy, EyeOff, FolderOpen, Github, Pencil, PencilOff, RotateCcw, Split, SquarePen, Trash2 } from "lucide-react"
 import { getRepoUrlLabel } from "../../../../shared/git-url"
 import {
   ContextMenu,
@@ -133,7 +133,6 @@ export function ChatRowMenu({
   repoUrl,
   onNewChat,
   onRename,
-  onShare,
   onCopyPath,
   onOpenInFinder,
   onOpenInEditor,
@@ -153,7 +152,6 @@ export function ChatRowMenu({
   /** Starts a fresh chat in this chat's project. */
   onNewChat: () => void
   onRename: () => void
-  onShare: () => void
   onCopyPath: () => void
   onOpenInFinder: () => void
   onOpenInEditor: () => void
@@ -223,15 +221,6 @@ export function ChatRowMenu({
           >
             <Pencil className="h-3.5 w-3.5" />
             <span className="text-xs font-medium">Rename</span>
-          </ContextMenuItem>
-          <ContextMenuItem
-            onSelect={(event) => {
-              event.preventDefault()
-              onShare()
-            }}
-          >
-            <UserRoundPlus className="h-3.5 w-3.5" />
-            <span className="text-xs font-medium">Share</span>
           </ContextMenuItem>
           <ContextMenuItem
             disabled={!canFork}

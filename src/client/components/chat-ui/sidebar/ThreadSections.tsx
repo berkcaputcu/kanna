@@ -113,7 +113,6 @@ interface Props {
   onRestoreChat: (chatId: string) => void
   onCreateChat: (projectId: string) => void
   onRenameChat: (chat: SidebarChatRow) => void
-  onShareChat: (chatId: string) => void
   onForkChat: (chat: SidebarChatRow) => void
   onArchiveChat: (chat: SidebarChatRow) => void
   onDeleteChat: (chat: SidebarChatRow) => void
@@ -140,7 +139,6 @@ function ThreadSectionsImpl({
   onRestoreChat,
   onCreateChat,
   onRenameChat,
-  onShareChat,
   onForkChat,
   onArchiveChat,
   onDeleteChat,
@@ -200,7 +198,6 @@ function ThreadSectionsImpl({
       onSelect={onSelectChat}
       onCreateChat={onCreateChat}
       onRenameChat={onRenameChat}
-      onShareChat={onShareChat}
       onCopyPath={onCopyPath}
       onOpenExternalPath={onOpenExternalPath}
       onForkChat={onForkChat}
@@ -288,7 +285,6 @@ function ThreadSectionsImpl({
                     onSelect={onOpenArchivedChat}
                     onCreateChat={onCreateChat}
                     onRenameChat={onRenameChat}
-                    onShareChat={onShareChat}
                     onCopyPath={onCopyPath}
                     onOpenExternalPath={onOpenExternalPath}
                     onForkChat={onForkChat}

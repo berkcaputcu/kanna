@@ -171,7 +171,7 @@ function measureReadAnchorLayout(
   }
 }
 
-/** No stored anchor — pin the latest user prompt. Used by the export viewer too. */
+/** No stored anchor — pin the latest user prompt. */
 const DEFAULT_READ_ANCHOR_STATE: ChatReadAnchorState = { resolved: true, anchor: null }
 
 /** What ChatPage drives the transcript with, in place of a list ref. */
@@ -230,7 +230,7 @@ interface ChatTranscriptViewportProps {
    * Where to publish `--transcript-scrollbar-w`. The chrome that overlays the
    * transcript — navbar wash, composer gradient — lives outside this component
    * but inside this element, and ends at the gutter so it stops dimming the
-   * scrollbar. Unset (the export viewer) simply means nobody is asking.
+   * scrollbar. Unset simply means nobody is asking.
    */
   scrollbarGutterHostRef?: React.RefObject<HTMLElement | null>
 }

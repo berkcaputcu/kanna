@@ -46,7 +46,6 @@ function render(props: Partial<Parameters<typeof ThreadRow>[0]> = {}) {
       onSelect={() => undefined}
       onCreateChat={() => undefined}
       onRenameChat={() => undefined}
-      onShareChat={() => undefined}
       onCopyPath={() => undefined}
       onOpenExternalPath={() => undefined}
       onForkChat={() => undefined}

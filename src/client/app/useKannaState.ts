@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useShallow } from "zustand/react/shallow"
-import { PROVIDERS, withPiFaveModels, type AgentProvider, type AppSettingsPatch, type AskUserQuestionAnswerMap, type AppSettingsSnapshot, type ChatDiffSnapshot, type FaveModel, type KeybindingsSnapshot, type LlmProviderSnapshot, type LlmProviderValidationResult, type ModelOptions, type ProviderCatalogEntry, type QueuedChatMessage, type StandaloneTranscriptExportCommandResult, type TranscriptEntry, type UpdateSnapshot } from "../../shared/types"
+import { PROVIDERS, withPiFaveModels, type AgentProvider, type AppSettingsPatch, type AskUserQuestionAnswerMap, type AppSettingsSnapshot, type ChatDiffSnapshot, type FaveModel, type KeybindingsSnapshot, type LlmProviderSnapshot, type LlmProviderValidationResult, type ModelOptions, type ProviderCatalogEntry, type QueuedChatMessage, type TranscriptEntry, type UpdateSnapshot } from "../../shared/types"
 import { NEW_CHAT_COMPOSER_ID, useChatPreferencesStore } from "../stores/chatPreferencesStore"
 import { useRightSidebarStore } from "../stores/rightSidebarStore"
 import { useTerminalLayoutStore } from "../stores/terminalLayoutStore"
@@ -21,7 +21,6 @@ import type { BranchActionFailure, BranchActionSuccess, ChatSnapshot, LocalProje
 import type { AskUserQuestionItem } from "../components/messages/types"
 import type { OpenLocalLinkTarget } from "../components/messages/shared"
 import { useAppDialog } from "../components/ui/app-dialog"
-import { useTheme } from "../hooks/useTheme"
 import { processTranscriptMessages } from "../lib/parseTranscript"
 import { canCancelStatus, getLatestToolIds, isProcessingStatus } from "./derived"
 import {
@@ -55,7 +54,6 @@ import { useAppSettingsSync } from "./useAppSettingsSync"
 import { useChatCommands } from "./useChatCommands"
 import { useChatReadAnchor, type ChatReadAnchorState } from "./useChatReadAnchor"
 import { useSendMessage } from "./useSendMessage"
-import { useShareExport } from "./useShareExport"
 import { useUpdateRestart } from "./useUpdateRestart"
 import type { EditorOpenSettings, OpenExternalAction } from "../../shared/protocol"
 
@@ -186,9 +184,6 @@ export interface KannaState {
   isProcessing: boolean
   canCancel: boolean
   isDraining: boolean
-  isExportingStandalone: boolean
-  standaloneShareUrl: string | null
-  standaloneShareComplete: boolean
   navbarLocalPath?: string
   /**
    * `repo/branch` for the project `navbarLocalPath` points at, null when that
@@ -224,7 +219,6 @@ export interface KannaState {
   handleStopDraining: () => Promise<void>
   handleRenameChat: (chat: SidebarChatRow) => Promise<void>
   handleRenameProject: (projectId: string, sidebarTitle: string | undefined, realTitle: string) => Promise<void>
-  handleShareChat: (chatId?: string | null) => Promise<void>
   handleArchiveChat: (chat: SidebarChatRow) => Promise<void>
   handleOpenArchivedChat: (chatId: string) => Promise<void>
   handleRestoreChat: (chatId: string) => Promise<void>
@@ -249,17 +243,12 @@ export interface KannaState {
     message?: string
   ) => Promise<void>
   handleCodexApproval: (toolUseId: string, decision: "accept" | "acceptForSession" | "decline") => Promise<void>
-  handleExportStandalone: (chatId?: string | null) => Promise<StandaloneTranscriptExportCommandResult | null>
-  handleCloseStandaloneShareDialog: () => void
-  handleOpenStandaloneShareLink: () => void
-  handleCopyStandaloneShareLink: () => Promise<boolean>
 }
 
 export function useKannaState(activeChatId: string | null): KannaState {
   const navigate = useNavigate()
   const socket = useKannaSocket()
   const dialog = useAppDialog()
-  const { resolvedTheme } = useTheme()
 
   const [localProjects, setLocalProjects] = useState<LocalProjectsSnapshot | null>(null)
   const [chatSnapshot, setChatSnapshot] = useState<ChatSnapshot | null>(null)
@@ -869,17 +858,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     defaultOpenLocalPath: navbarLocalPath,
   })
 
-  const {
-    isExportingStandalone,
-    standaloneShareUrl,
-    standaloneShareComplete,
-    handleExportStandalone,
-    handleShareChat,
-    handleCloseStandaloneShareDialog,
-    handleCopyStandaloneShareLink,
-    handleOpenStandaloneShareLink,
-  } = useShareExport({ socket, activeChatId, resolvedTheme, dialog, setCommandError })
-
   const handleCompose = useCallback(() => {
     const intent = resolveComposeIntent({
       selectedProjectId,
@@ -929,9 +907,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     isProcessing,
     canCancel,
     isDraining,
-    isExportingStandalone,
-    standaloneShareUrl,
-    standaloneShareComplete,
     navbarLocalPath,
     navbarRepoLabel,
     editorLabel,
@@ -962,7 +937,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleStopDraining,
     handleRenameChat,
     handleRenameProject,
-    handleShareChat,
     handleArchiveChat,
     handleOpenArchivedChat,
     handleRestoreChat,
@@ -978,9 +952,5 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleAskUserQuestion,
     handleExitPlanMode,
     handleCodexApproval,
-    handleExportStandalone,
-    handleCloseStandaloneShareDialog,
-    handleOpenStandaloneShareLink,
-    handleCopyStandaloneShareLink,
   }
 }

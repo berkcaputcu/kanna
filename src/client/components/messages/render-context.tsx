@@ -1,17 +1,14 @@
 import { createContext, useContext, type ReactNode } from "react"
-import type { StandaloneTranscriptAttachmentMode } from "../../../shared/types"
 
 export interface TranscriptRenderOptions {
   readonly: boolean
   localLinkMode: "open" | "text"
-  attachmentMode: "live" | StandaloneTranscriptAttachmentMode
   /**
    * Fetch an entry's raw provider payload on demand, or null when the host has
    * it inline.
    *
    * Live snapshots strip `debugRaw` (it duplicates `content` and dominated the
-   * payload), so the raw JSON view pulls it through this when opened. Export
-   * bundles still carry it inline and leave this null.
+   * payload), so the raw JSON view pulls it through this when opened.
    */
   loadEntryDebugRaw: ((entryId: string) => Promise<string | null>) | null
 }
@@ -19,7 +16,6 @@ export interface TranscriptRenderOptions {
 const DEFAULT_RENDER_OPTIONS: TranscriptRenderOptions = {
   readonly: false,
   localLinkMode: "open",
-  attachmentMode: "live",
   loadEntryDebugRaw: null,
 }
 

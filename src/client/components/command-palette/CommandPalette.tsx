@@ -28,7 +28,6 @@ import {
   Paperclip,
   Plus,
   Settings2,
-  Share2,
   ShieldCheck,
   Sparkles,
   SquareMenu,
@@ -780,16 +779,6 @@ export function CommandPalette({ state }: { state: KannaState }) {
     }
 
     if (state.activeChatId) {
-      list.push({
-        id: "share-chat",
-        title: "Share Chat",
-        keywords: ["export", "link", "standalone", "transcript"],
-        icon: <Share2 className={ICON_CLASS} />,
-        run: () => {
-          close()
-          void state.handleShareChat(state.activeChatId)
-        },
-      })
       if (currentChatRow && currentChatRow.canFork !== false) {
         list.push({
           id: "fork-chat",
@@ -1002,7 +991,6 @@ export function CommandPalette({ state }: { state: KannaState }) {
     state.handleForkChat,
     state.handleHideProject,
     state.handleOpenExternal,
-    state.handleShareChat,
     state.handleWriteAppSettings,
     state.keybindings,
     state.navbarLocalPath,

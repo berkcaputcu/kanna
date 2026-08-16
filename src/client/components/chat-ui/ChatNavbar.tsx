@@ -1,5 +1,5 @@
 import { memo } from "react"
-import { Check, Flower, GitBranch, Globe, Loader2, Menu, MoreHorizontal, PanelLeft, PanelRight, Search, SquarePen, Terminal, UserRoundPlus } from "lucide-react"
+import { Flower, GitBranch, Globe, Menu, MoreHorizontal, PanelLeft, PanelRight, Search, SquarePen, Terminal } from "lucide-react"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../../../shared/protocol"
 import { Button } from "../ui/button"
 import { CardHeader } from "../ui/card"
@@ -13,19 +13,11 @@ import { useAppSettingsStore } from "../../stores/appSettingsStore"
 function NavbarOverflowMenu({
   showOnDesktop,
   onToggleEmbeddedTerminal,
-  onExportTranscript,
-  canExportTranscript,
-  isExportingTranscript,
-  exportTranscriptComplete,
 }: {
   showOnDesktop: boolean
   onToggleEmbeddedTerminal?: () => void
-  onExportTranscript?: () => void
-  canExportTranscript: boolean
-  isExportingTranscript: boolean
-  exportTranscriptComplete: boolean
 }) {
-  if (!onToggleEmbeddedTerminal && !onExportTranscript) return null
+  if (!onToggleEmbeddedTerminal) return null
 
   return (
     <ContextMenu>
@@ -55,25 +47,6 @@ function NavbarOverflowMenu({
             <span className="text-xs font-medium">Toggle Terminal</span>
           </ContextMenuItem>
         ) : null}
-        {onExportTranscript ? (
-          <ContextMenuItem
-            disabled={!canExportTranscript || isExportingTranscript}
-            onSelect={(event) => {
-              event.preventDefault()
-              if (!canExportTranscript || isExportingTranscript) return
-              onExportTranscript()
-            }}
-          >
-            {isExportingTranscript ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : exportTranscriptComplete ? (
-              <Check className="h-3.5 w-3.5 text-emerald-400" />
-            ) : (
-              <UserRoundPlus strokeWidth={2} className="h-3.5 w-3.5" />
-            )}
-            <span className="text-xs font-medium">Share Chat</span>
-          </ContextMenuItem>
-        ) : null}
       </ContextMenuContent>
     </ContextMenu>
   )
@@ -91,10 +64,6 @@ interface Props {
   onToggleGitPanel?: () => void
   onToggleBrowserPanel?: () => void
   onOpenExternal?: (action: OpenExternalAction, editor?: EditorOpenSettings) => void
-  onExportTranscript?: () => void
-  canExportTranscript?: boolean
-  isExportingTranscript?: boolean
-  exportTranscriptComplete?: boolean
   editorPreset?: EditorPreset
   editorCommandTemplate?: string
   platform?: NodeJS.Platform
@@ -126,10 +95,6 @@ function ChatNavbarImpl({
   onToggleGitPanel,
   onToggleBrowserPanel,
   onOpenExternal,
-  onExportTranscript,
-  canExportTranscript = false,
-  isExportingTranscript = false,
-  exportTranscriptComplete = false,
   editorPreset = "cursor",
   editorCommandTemplate,
   platform = "darwin",
@@ -221,7 +186,7 @@ function ChatNavbarImpl({
 
         <div className="flex-1 min-w-0" />
 
-        {localPath && (onOpenExternal || onToggleEmbeddedTerminal || onToggleGitPanel || onToggleBrowserPanel || onExportTranscript) ? (
+        {localPath && (onOpenExternal || onToggleEmbeddedTerminal || onToggleGitPanel || onToggleBrowserPanel) ? (
           <div className="flex items-center gap-2 flex-shrink-0">
             {onOpenExternal ? (
               <div className="hidden md:block border border-border/70 rounded-[9px] backdrop-blur-lg">
@@ -236,15 +201,11 @@ function ChatNavbarImpl({
                 />
               </div>
             ) : null}
-            {(onToggleEmbeddedTerminal || onToggleGitPanel || onToggleBrowserPanel || onExportTranscript) ? (
+            {(onToggleEmbeddedTerminal || onToggleGitPanel || onToggleBrowserPanel) ? (
               <div className="flex items-center  rounded-[9px] h-[30px]">
                 <NavbarOverflowMenu
                   showOnDesktop={rightPanelVisible}
                   onToggleEmbeddedTerminal={onToggleEmbeddedTerminal}
-                  onExportTranscript={onExportTranscript}
-                  canExportTranscript={canExportTranscript}
-                  isExportingTranscript={isExportingTranscript}
-                  exportTranscriptComplete={exportTranscriptComplete}
                 />
                 {onToggleEmbeddedTerminal ? (
                 <HotkeyTooltip>
@@ -265,28 +226,6 @@ function ChatNavbarImpl({
                   <HotkeyTooltipContent side="bottom" shortcut={terminalShortcut} />
                 </HotkeyTooltip>
               ) : null}
-                {onExportTranscript ? (
-                  <Button
-                    variant="ghost"
-                    size="none"
-                    onClick={onExportTranscript}
-                    disabled={!canExportTranscript || isExportingTranscript}
-                    title="Share chat"
-                    aria-label="Share chat"
-                    className={cn(
-                      rightPanelVisible ? "hidden" : "hidden md:flex",
-                      "border border-border/0 hover:!border-border/0 px-1.5 h-9 hover:!bg-transparent disabled:opacity-50"
-                    )}
-                  >
-                    {isExportingTranscript ? (
-                      <Loader2 className="h-4 animate-spin" />
-                    ) : exportTranscriptComplete ? (
-                      <Check className="h-4 text-emerald-400" />
-                    ) : (
-                      <UserRoundPlus strokeWidth={2} className="h-4" />
-                    )}
-                  </Button>
-                ) : null}
                 {onToggleBrowserPanel && showBrowserPanelButton ? (
                   <Button
                     variant="ghost"
