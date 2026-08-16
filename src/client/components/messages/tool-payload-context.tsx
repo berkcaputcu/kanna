@@ -6,8 +6,8 @@ import type { ToolPayloadStore } from "../../app/ChatPage/toolPayloadStore"
  * Access to tool payloads the transcript did not ship inline.
  *
  * Null — the default — means payloads are already inline and nothing needs
- * fetching. That is the export viewer and any transcript bundle, which carry
- * full entries; they render unchanged without knowing this exists.
+ * fetching. Some transcript hosts carry full entries; they render unchanged
+ * without knowing this exists.
  */
 const ToolPayloadContext = createContext<ToolPayloadStore | null>(null)
 

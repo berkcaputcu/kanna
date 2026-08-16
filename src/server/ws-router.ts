@@ -18,7 +18,6 @@ import { listRecentGitHubRepos } from "./github"
 import { applyPiFaveModels } from "./provider-catalog"
 import { readProjectQuickActions, writeProjectQuickActions } from "./project-quick-actions"
 import { installSkill, listGlobalSkillsWithSources, listInstalledSkills, searchSkills, uninstallSkill } from "./skills"
-import { writeStandaloneTranscriptExport } from "./standalone-export"
 import { TerminalManager } from "./terminal-manager"
 import type { WorktreeProbe } from "./worktree-probe"
 import type { ProviderAuthManager } from "./provider-auth"
@@ -1517,19 +1516,6 @@ export function createWsRouter({
         case "chat.stopDraining": {
           await agent.stopDraining(command.chatId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
-          return
-        }
-        case "chat.exportStandalone": {
-          const { chat, project } = resolveChatProject(command.chatId)
-          const result = await writeStandaloneTranscriptExport({
-            chatId: chat.id,
-            title: chat.title,
-            localPath: project.localPath,
-            theme: command.theme,
-            attachmentMode: command.attachmentMode,
-            messages: store.getMessages(command.chatId),
-          })
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "chat.respondTool": {

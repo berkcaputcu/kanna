@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom"
 import { Flower } from "lucide-react"
-import { StandaloneShareDialog } from "../components/chat-ui/StandaloneShareDialog"
 import { CommandPalette } from "../components/command-palette/CommandPalette"
 import { AppDialogProvider } from "../components/ui/app-dialog"
 import { Button } from "../components/ui/button"
@@ -269,9 +268,6 @@ function KannaLayout() {
   const handleSidebarRenameProject = useCallback((projectId: string, sidebarTitle: string | undefined, realTitle: string) => {
     void state.handleRenameProject(projectId, sidebarTitle, realTitle)
   }, [state.handleRenameProject])
-  const handleSidebarShareChat = useCallback((chatId: string) => {
-    void state.handleShareChat(chatId)
-  }, [state.handleShareChat])
   const handleSidebarArchiveChat = useCallback((chat: Parameters<typeof state.handleArchiveChat>[0]) => {
     void state.handleArchiveChat(chat)
   }, [state.handleArchiveChat])
@@ -329,7 +325,6 @@ function KannaLayout() {
       currentProjectId={state.activeProjectId}
       keybindings={state.keybindings}
       onRenameChat={handleSidebarRenameChat}
-      onShareChat={handleSidebarShareChat}
       onArchiveChat={handleSidebarArchiveChat}
       onOpenArchivedChat={handleOpenArchivedChat}
       onRestoreChat={handleRestoreChat}
@@ -397,17 +392,6 @@ function KannaLayout() {
       <Outlet context={state} />
       <SetupWizard />
       <CommandPalette state={state} />
-      <StandaloneShareDialog
-        open={Boolean(state.standaloneShareUrl)}
-        shareUrl={state.standaloneShareUrl ?? ""}
-        onOpenChange={(open) => {
-          if (!open) {
-            state.handleCloseStandaloneShareDialog()
-          }
-        }}
-        onOpenLink={state.handleOpenStandaloneShareLink}
-        onCopyLink={state.handleCopyStandaloneShareLink}
-      />
     </div>
   )
 }

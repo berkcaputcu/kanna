@@ -35,9 +35,7 @@ Four measured facts drove every boundary below.
 3. **`src/shared/` has no `node:` imports, and no client file imports from
    `src/server/`.** The isomorphic boundary is already enforced by convention;
    it just isn't packaged.
-4. **`src/export-viewer/main.tsx` renders a full transcript from a JSON blob**
-   using `ChatTranscriptViewport` + `processTranscriptMessages` +
-   `TranscriptRenderOptionsProvider`, with no socket, no store, no server. The
+4. **The transcript UI is already isolated from the socket and server.** The
    chat-UI library boundary is proven, not proposed.
 
 Counter-facts — where the coupling actually is:
@@ -218,9 +216,6 @@ Moves here: `components/messages/*`, `components/ui/*` (as
 Two leaks to invert: `components/messages/` currently imports
 `chat-ui/ChatPreferenceControls` and `ChatPage/toolPayloadStore`.
 
-`src/export-viewer` becomes the package's own example/fixture — it already
-proves the boundary works.
-
 ### `@kanna/server` — the studio switchboard
 
 *ELI5: accepts connections, checks credentials, routes each request to the crew /
@@ -250,13 +245,13 @@ are in `protocol`; the implementation is a host concern.
 
 Everything that makes it Kanna: CLI, updater, nightly, instance lock, cloud
 tunnel + pairing, onboarding, setup wizard, settings, keybindings, analytics,
-machine name, share/export, command palette, sidebar composition,
+machine name, share tunnel, command palette, sidebar composition,
 `worktree-probe` scheduling, project discovery, the React app shell.
 
 Stays: `cli.ts`, `cli-runtime.ts`, `cli-supervisor.ts`, `restart.ts`,
 `nightly.ts`, `instance.ts`, `update-manager.ts`, `machine-name.ts`,
 `analytics.ts`, `app-settings.ts`, `keybindings.ts`, `discovery.ts`,
-`worktree-probe.ts`, `skills.ts`, `share.ts`, `standalone-export.ts`,
+`worktree-probe.ts`, `skills.ts`, `share.ts`,
 `project-quick-actions.ts`, `cloud/*`, and the client's `app/`, `settings/`,
 `auth/`, `cloud/`, `command-palette/`, `KannaSidebar.tsx`, stores, hooks.
 
@@ -294,7 +289,6 @@ kanna/
         ├── bin/kanna
         ├── src/server/
         ├── src/client/
-        └── src/export-viewer/
 ```
 
 Bun workspaces. Packages are `@kanna/*`, private, TypeScript source consumed
@@ -469,7 +463,7 @@ That bottom row is the entire argument for this refactor.
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  kanna  (the product — unchanged)                                        │
 │  CLI · updater · cloud tunnel + pair · onboarding · settings ·           │
-│  keybindings · analytics · command palette · sidebar · share/export      │
+│  keybindings · analytics · command palette · sidebar · share tunnel       │
 │  worktree-probe scheduling · project discovery                          │
 └──────┬────────────────────────────────────────────────────┬──────────────┘
        │                                                    │
@@ -548,8 +542,7 @@ and `bun test` must pass at every phase boundary.
 
 - [ ] **Phase 6 — `@kanna/chat-ui`.**
   Move `components/messages/*`, `components/ui/*`, the transcript viewport,
-  composer, git panel. Invert the two `messages/` → app leaks. Re-point
-  `src/export-viewer` at the package as its example.
+  composer, git panel. Invert the two `messages/` → app leaks.
 
 - [ ] **Phase 7 — `@kanna/server`.**
   Whatever is left that isn't the product: HTTP routes, auth, uploads,

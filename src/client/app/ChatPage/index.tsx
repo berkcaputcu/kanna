@@ -627,8 +627,8 @@ export function ChatPage() {
 
   // "Open this chat at this message", carried in router state by the sidebar's
   // hover card. Held here rather than read in the viewport so the viewport
-  // stays a pure consumer of props and the export viewer, which has no router,
-  // simply never passes one.
+  // stays a pure consumer of props; callers without router state simply never
+  // pass one.
   const { jumpRequest, onJumpRequestHandled } = useTranscriptJumpRequest()
 
   useStickyChatFocus({
@@ -757,12 +757,6 @@ export function ChatPage() {
   const handleOpenExternal = useCallback<NonNullable<ComponentProps<typeof ChatNavbar>["onOpenExternal"]>>((action, editor) => {
     void state.handleOpenExternal(action, editor)
   }, [state.handleOpenExternal])
-
-  // Stable so the memoized navbar can actually skip a render; an inline arrow
-  // here would be a new prop on every streamed entry.
-  const handleExportTranscript = useCallback(() => {
-    void state.handleShareChat(state.activeChatId)
-  }, [state.activeChatId, state.handleShareChat])
 
   const handleRemoveTerminal = useCallback((currentProjectId: string, terminalId: string) => {
     const paneCount = useTerminalLayoutStore.getState().projects[currentProjectId]?.terminals.length ?? 0
@@ -987,10 +981,6 @@ export function ChatPage() {
           onToggleGitPanel={projectId ? handleToggleGitPanel : undefined}
           onToggleBrowserPanel={projectId ? handleToggleBrowserPanel : undefined}
           onOpenExternal={handleOpenExternal}
-          onExportTranscript={state.activeChatId ? handleExportTranscript : undefined}
-          canExportTranscript={Boolean(state.activeChatId) && !state.isExportingStandalone}
-          isExportingTranscript={state.isExportingStandalone}
-          exportTranscriptComplete={state.standaloneShareComplete}
           editorPreset={editorPreset}
           editorCommandTemplate={editorCommandTemplate}
           platform={state.localProjects?.machine.platform}

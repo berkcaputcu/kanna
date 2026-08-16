@@ -223,7 +223,7 @@ src/
 ├── client/          React UI layer
 │   ├── app/         App router, pages, socket client, useKannaState + feature hooks
 │   │                (useChatCommands, useSendMessage, useAppSettingsSync,
-│   │                useUpdateRestart, useShareExport, snapshotEquality)
+│   │                useUpdateRestart, snapshotEquality)
 │   ├── components/  Messages, chat chrome (incl. chat-ui/git/ panel modules),
 │   │                dialogs, buttons, inputs
 │   ├── hooks/       Theme, standalone mode detection

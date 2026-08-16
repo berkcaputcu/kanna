@@ -36,7 +36,6 @@ interface ThreadRowProps {
   onSelect: (chatId: string) => void
   onCreateChat: (projectId: string) => void
   onRenameChat: (chat: SidebarThread["row"]) => void
-  onShareChat: (chatId: string) => void
   onCopyPath: (localPath: string) => void
   onOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => void
   onForkChat: (chat: SidebarThread["row"]) => void
@@ -74,7 +73,6 @@ function ThreadRowImpl({
   onSelect,
   onCreateChat,
   onRenameChat,
-  onShareChat,
   onCopyPath,
   onOpenExternalPath,
   onForkChat,
@@ -142,7 +140,6 @@ function ThreadRowImpl({
       onNewChat={() => onCreateChat(thread.projectId)}
       onRestore={archived ? () => onRestoreChat(thread.row.chatId) : undefined}
       onRename={() => onRenameChat(thread.row)}
-      onShare={() => onShareChat(thread.row.chatId)}
       onCopyPath={() => onCopyPath(thread.row.localPath)}
       onOpenInFinder={() => onOpenExternalPath("open_finder", thread.row.localPath)}
       onOpenInEditor={() => onOpenExternalPath("open_editor", thread.row.localPath)}

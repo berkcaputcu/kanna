@@ -7,8 +7,8 @@ Bun server + React 19 client, talking over one WebSocket.
 
 - `bun run dev` — client (Vite) + server together
 - `bun test` — unit/integration suite (Bun test)
-- `bun run check` — typecheck + both production builds
-- `bun run build` — client + export-viewer bundles
+- `bun run check` — typecheck + production client build
+- `bun run build` — client bundle
 
 ## How it fits together
 

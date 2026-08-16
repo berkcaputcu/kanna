@@ -14,8 +14,6 @@ import type {
   ModelOptions,
   SelectedBranch,
   SidebarData,
-  StandaloneTranscriptAttachmentMode,
-  StandaloneTranscriptExportResult,
   UpdateSnapshot,
   UsageLimitsSnapshot,
   EditorPreset,
@@ -253,12 +251,6 @@ export type ClientCommand =
   | { type: "chat.ignoreDiffFile"; chatId: string; path: string }
   | { type: "chat.cancel"; chatId: string }
   | { type: "chat.stopDraining"; chatId: string }
-  | {
-      type: "chat.exportStandalone"
-      chatId: string
-      theme: "light" | "dark"
-      attachmentMode: StandaloneTranscriptAttachmentMode
-    }
   | { type: "chat.respondTool"; chatId: string; toolUseId: string; result: unknown }
   | {
       type: "message.enqueue"
@@ -310,7 +302,7 @@ export type ServerSnapshot =
 export type ServerEnvelope =
   | { v: 1; type: "snapshot"; id: string; snapshot: ServerSnapshot }
   | { v: 1; type: "event"; id: string; event: TerminalEvent }
-  | { v: 1; type: "ack"; id: string; result?: unknown | StandaloneTranscriptExportResult }
+  | { v: 1; type: "ack"; id: string; result?: unknown }
   | { v: 1; type: "error"; id?: string; message: string }
 
 export function isClientEnvelope(value: unknown): value is ClientEnvelope {
