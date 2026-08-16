@@ -213,6 +213,7 @@ interface ChatPreferenceControlsProps {
 const MODE_ICONS: Record<ChatMode, typeof LockOpen> = {
   "full-access": LockOpen,
   "approval": ShieldCheck,
+  "approve-for-me": Sparkles,
   "plan": ListTodo,
   "auto-plan": Sparkles,
 }

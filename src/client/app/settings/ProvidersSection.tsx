@@ -127,7 +127,9 @@ export function ProvidersSection({
     setProviderDefaultMode(provider, mode)
     const flags = chatModeToFlags(mode, providerDefaults[provider].autoPlan)
     const modelOptions = provider === "codex"
-      ? { accessMode: mode === "approval" ? "approval" as const : "full-access" as const }
+      ? {
+        accessMode: mode === "approval" || mode === "approve-for-me" ? mode : "full-access" as const,
+      }
       : undefined
     void handleWriteAppSettings({
       providerDefaults: {

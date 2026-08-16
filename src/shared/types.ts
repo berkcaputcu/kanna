@@ -162,7 +162,7 @@ export interface ProviderEffortOption {
 }
 
 export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
-export type CodexAccessMode = "approval" | "full-access"
+export type CodexAccessMode = "approval" | "approve-for-me" | "full-access"
 
 export interface CodexReasoningEffortOption extends ProviderEffortOption {
   id: CodexReasoningEffort
@@ -257,7 +257,7 @@ export interface ProviderPreference<TModelOptions> {
  * swappable at runtime), autoPlan maps to the session's tool allowlist (fixed
  * at session creation).
  */
-export type ChatMode = "full-access" | "plan" | "approval" | "auto-plan"
+export type ChatMode = "full-access" | "plan" | "approval" | "approve-for-me" | "auto-plan"
 
 export function chatModeFromFlags(
   planMode: boolean,
@@ -266,7 +266,15 @@ export function chatModeFromFlags(
 ): ChatMode {
   // planMode wins: a user who explicitly asked to start in plan mode sees
   // "Plan Mode" even while autoPlan is held underneath.
-  return planMode ? "plan" : autoPlan ? "auto-plan" : codexAccessMode === "approval" ? "approval" : "full-access"
+  return planMode
+    ? "plan"
+    : autoPlan
+      ? "auto-plan"
+      : codexAccessMode === "approval"
+        ? "approval"
+        : codexAccessMode === "approve-for-me"
+          ? "approve-for-me"
+          : "full-access"
 }
 
 export function chatModeToFlags(
@@ -281,6 +289,7 @@ export function chatModeToFlags(
     case "auto-plan":
       return { planMode: false, autoPlan: true }
     case "approval":
+    case "approve-for-me":
     case "full-access":
       return { planMode: false, autoPlan: false }
   }

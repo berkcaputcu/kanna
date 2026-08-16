@@ -217,9 +217,21 @@ function isRecoverableResumeError(error: unknown): boolean {
 }
 
 function codexPolicy(accessMode: CodexAccessMode = "full-access") {
-  return accessMode === "approval"
-    ? { approvalPolicy: "on-request" as const, sandbox: "workspace-write" as const }
-    : { approvalPolicy: "never" as const, sandbox: "danger-full-access" as const }
+  if (accessMode === "approval") {
+    return {
+      approvalPolicy: "on-request" as const,
+      sandbox: "workspace-write" as const,
+      approvalsReviewer: "user" as const,
+    }
+  }
+  if (accessMode === "approve-for-me") {
+    return {
+      approvalPolicy: "on-request" as const,
+      sandbox: "workspace-write" as const,
+      approvalsReviewer: "auto_review" as const,
+    }
+  }
+  return { approvalPolicy: "never" as const, sandbox: "danger-full-access" as const }
 }
 
 const MULTI_SELECT_HINT_PATTERN = /\b(all that apply|select all|choose all|pick all|select multiple|choose multiple|pick multiple|multiple selections?|multiple choice|more than one|one or more)\b/i
@@ -947,7 +959,7 @@ export class CodexAppServerManager {
       const response = await this.sendRequest<TurnStartResponse>(context, "turn/start", {
         threadId: context.sessionToken ?? "",
         input,
-        approvalPolicy: codexPolicy(args.accessMode).approvalPolicy,
+        ...codexPolicy(args.accessMode),
         model: args.model,
         effort: args.effort,
         serviceTier: args.serviceTier,

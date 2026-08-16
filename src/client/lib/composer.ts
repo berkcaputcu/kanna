@@ -207,6 +207,7 @@ export interface ComposerOptionControls {
 export const CHAT_MODE_LABELS: Record<ChatMode, { label: string; description: string }> = {
   "full-access": { label: "Full Access", description: "Execution without approval" },
   "approval": { label: "Approval Mode", description: "Workspace access with approval when needed" },
+  "approve-for-me": { label: "Approve for me", description: "Workspace access with automatic approval review" },
   "plan": { label: "Plan Mode", description: "Review a plan before execution" },
   "auto-plan": { label: "Auto Plan", description: "The agent decides when to plan first" },
 }
@@ -259,7 +260,7 @@ export function deriveComposerOptionControls(
     : null
 
   const modeOptions: ChatMode[] = state.provider === "codex"
-    ? ["full-access", "approval", "plan"]
+    ? ["full-access", "approval", "approve-for-me", "plan"]
     : providerConfig?.supportsAutoPlanMode
     ? ["full-access", "plan", "auto-plan"]
     : ["full-access", "plan"]

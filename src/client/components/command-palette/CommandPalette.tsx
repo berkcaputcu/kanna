@@ -203,6 +203,7 @@ const ICON_CLASS = "h-4 w-4 text-muted-foreground"
 const MODE_COMMAND_ICONS: Record<ChatMode, typeof LockOpen> = {
   "full-access": LockOpen,
   "approval": ShieldCheck,
+  "approve-for-me": Sparkles,
   "plan": ListTodo,
   "auto-plan": Sparkles,
 }
@@ -210,6 +211,7 @@ const MODE_COMMAND_ICONS: Record<ChatMode, typeof LockOpen> = {
 const MODE_COMMAND_KEYWORDS: Record<ChatMode, string[]> = {
   "full-access": ["execute", "yolo", "no approval"],
   "approval": ["approval", "safe", "workspace", "permission"],
+  "approve-for-me": ["approve for me", "automatic approval", "auto review", "auto-approve"],
   "plan": ["review", "safe", "approve"],
   "auto-plan": ["automatic", "decide", "enter plan mode"],
 }

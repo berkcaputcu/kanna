@@ -100,7 +100,7 @@ function codexModelOptionsForMode(
   modelOptions: CodexModelOptions,
   mode: ChatMode,
 ): CodexModelOptions {
-  if (mode === "approval") return { ...modelOptions, accessMode: "approval" }
+  if (mode === "approval" || mode === "approve-for-me") return { ...modelOptions, accessMode: mode }
   const { accessMode: _accessMode, ...rest } = modelOptions
   return rest
 }

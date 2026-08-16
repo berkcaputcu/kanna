@@ -2337,11 +2337,69 @@ describe("CodexAppServerManager", () => {
     const turnStart = process.messages.find((message: any) => message.method === "turn/start") as any
     const approvalResponse = process.messages.find((message: any) => message.id === "approval-1")
     const approvalToolCall = events.find((event) => event.type === "transcript" && event.entry.kind === "tool_call")
-    expect(threadStart.params).toMatchObject({ approvalPolicy: "on-request", sandbox: "workspace-write" })
-    expect(turnStart.params.approvalPolicy).toBe("on-request")
+    expect(threadStart.params).toMatchObject({
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+    })
+    expect(turnStart.params).toMatchObject({ approvalPolicy: "on-request", approvalsReviewer: "user" })
     expect(approvalResponse).toEqual({ id: "approval-1", result: { decision: "accept" } })
     expect(approvalToolCall?.entry.kind).toBe("tool_call")
     if (!approvalToolCall || approvalToolCall.entry.kind !== "tool_call") throw new Error("missing approval tool call")
     expect(approvalToolCall.entry.tool.toolKind).toBe("codex_command_approval")
+  })
+
+  test("routes approve-for-me mode to the app-server automatic reviewer", async () => {
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") {
+        child.writeServerMessage({ id: message.id, result: { userAgent: "codex-test" } })
+      } else if (message.method === "thread/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { thread: { id: "thread-auto-review" }, model: "gpt-5.4", reasoningEffort: "high" },
+        })
+      } else if (message.method === "turn/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { turn: { id: "turn-auto-review", status: "inProgress", error: null } },
+        })
+        child.writeServerMessage({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-auto-review",
+            turn: { id: "turn-auto-review", status: "completed", error: null },
+          },
+        })
+      }
+    })
+
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    await manager.startSession({
+      chatId: "chat-auto-review",
+      cwd: "/tmp/project",
+      model: "gpt-5.4",
+      sessionToken: null,
+      accessMode: "approve-for-me",
+    })
+
+    const turn = await manager.startTurn({
+      chatId: "chat-auto-review",
+      model: "gpt-5.4",
+      content: "create a file",
+      planMode: false,
+      accessMode: "approve-for-me",
+      onToolRequest: async () => ({}),
+      onApprovalRequest: async () => "accept",
+    })
+    await collectStream(turn.stream)
+
+    const threadStart = process.messages.find((message: any) => message.method === "thread/start") as any
+    const turnStart = process.messages.find((message: any) => message.method === "turn/start") as any
+    expect(threadStart.params).toMatchObject({
+      approvalPolicy: "on-request",
+      approvalsReviewer: "auto_review",
+      sandbox: "workspace-write",
+    })
+    expect(turnStart.params).toMatchObject({ approvalPolicy: "on-request", approvalsReviewer: "auto_review" })
   })
 })
