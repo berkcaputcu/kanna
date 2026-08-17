@@ -7,6 +7,7 @@ import {
   limitRingRemainingPercent,
   selectLimitRingWindows,
 } from "../../lib/usageLimitRings"
+import { calculateUsageForecast } from "../../lib/usageForecast"
 import { cn } from "../../lib/utils"
 import { useAppSettingsStore } from "../../stores/appSettingsStore"
 import { useUsageLimitsSnapshot } from "../../stores/usageLimitsStore"
@@ -38,6 +39,7 @@ function LimitRing({
   const resets = window?.resetsAt ? formatUntil(window.resetsAt) : null
   const title = window?.label ?? slotLabel
   const alsoRemaining = limitRingRemainingPercent(alsoApplies?.usedPercent ?? null)
+  const forecast = window ? calculateUsageForecast(window) : null
 
   return (
     <Tooltip delayDuration={0}>
@@ -48,7 +50,7 @@ function LimitRing({
           className="group inline-flex items-center justify-center rounded-full transition-opacity hover:opacity-85"
           aria-label={
             remaining !== null
-              ? `${title}: ${Math.round(remaining)}% remaining. Open the Usage page.`
+              ? `${title}: ${Math.round(100 - remaining)}% used, ${Math.round(remaining)}% remaining${forecast ? `, ${Math.round(forecast.predictedFinalPercent)}% projected` : ""}. Open the Usage page.`
               : `${title}: no usage data. Open the Usage page.`
           }
         >
@@ -96,9 +98,14 @@ function LimitRing({
           <div className="whitespace-nowrap text-xs font-medium text-foreground">{title}</div>
           <div className="whitespace-nowrap text-xs text-muted-foreground">
             {remaining !== null
-              ? `${Math.round(remaining)}% left${resets ? ` · Resets ${resets}` : ""}`
+              ? `${Math.round(100 - remaining)}% used · ${Math.round(remaining)}% left${resets ? ` · Resets ${resets}` : ""}`
               : unavailableDetail ?? "No usage data yet."}
           </div>
+          {forecast ? (
+            <div className="whitespace-nowrap text-xs text-muted-foreground">
+              {`Projected ${Math.round(forecast.predictedFinalPercent)}% at current pace · ${forecast.remainingText} left`}
+            </div>
+          ) : null}
           {alsoApplies && alsoRemaining !== null ? (
             <div className="whitespace-nowrap text-xs text-muted-foreground">
               {`${alsoApplies.label}: ${Math.round(alsoRemaining)}% left`}

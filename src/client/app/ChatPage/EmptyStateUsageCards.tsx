@@ -47,7 +47,7 @@ export function EmptyStateUsageCards({
   return (
     <div className="w-full space-y-3 text-left">
       {cards.map((provider) => (
-        <ProviderCard key={provider.provider} snapshot={provider} collapsible />
+        <ProviderCard key={provider.provider} snapshot={provider} collapsible forecastWhenCollapsed />
       ))}
     </div>
   )

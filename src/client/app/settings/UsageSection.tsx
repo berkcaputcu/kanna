@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react"
 import type { ProviderUsageSnapshot, UsageLimitWindow, UsageLimitsSnapshot } from "../../../shared/types"
 import { PROVIDERS, usageLevel } from "../../../shared/types"
 import { PROVIDER_ICONS } from "../../components/chat-ui/ChatPreferenceControls"
+import { UsageForecast } from "../../components/UsageForecast"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip"
 import { formatRelativeTime, formatUntil } from "../../lib/formatters"
 import { cn } from "../../lib/utils"
@@ -145,12 +146,15 @@ function WindowRow({ window }: { window: UsageLimitWindow }) {
 export function ProviderCard({
   snapshot,
   collapsible = false,
+  forecastWhenCollapsed = false,
   refreshing = false,
   onRefresh,
 }: {
   snapshot: ProviderUsageSnapshot
   /** When true, the card starts collapsed and the header toggles it open/closed. */
   collapsible?: boolean
+  /** Keep the forecast visible on the compact new-chat cards while their rows stay collapsed. */
+  forecastWhenCollapsed?: boolean
   /** Show "Refreshing…" in the header's timestamp slot while a read is in flight. */
   refreshing?: boolean
   /**
@@ -276,6 +280,7 @@ export function ProviderCard({
         {displayWindows.map((window) => (
           <WindowRow key={window.id} window={window} />
         ))}
+        <UsageForecast windows={displayWindows} />
         {snapshot.credits ? (
           <div className="flex items-baseline justify-between gap-3 border-t border-border pt-3 text-sm">
             <span className="text-foreground">{snapshot.credits.label}</span>
@@ -292,6 +297,10 @@ export function ProviderCard({
           ?? (snapshot.status === "unknown" ? "No usage recorded yet." : "Usage limits are not available.")}
       </div>
     )
+  ) : forecastWhenCollapsed ? (
+    <div className="mt-3">
+      <UsageForecast windows={displayWindows} />
+    </div>
   ) : null
 
   const cardClass = "group/usage-card block w-full rounded-2xl border border-border bg-card/40 px-3.5 py-3 text-left"
