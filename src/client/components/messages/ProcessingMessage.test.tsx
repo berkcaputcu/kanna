@@ -3,13 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { ProcessingMessage } from "./ProcessingMessage"
 
 describe("ProcessingMessage", () => {
-  test("shows the live duration beside the processing status", () => {
+  test("combines the processing status and live duration into one label", () => {
     const html = renderToStaticMarkup(
       <ProcessingMessage status="running" startedAt={Date.now() - 61_000} />
     )
 
-    expect(html).toContain("Running...")
-    expect(html).toContain("Running for 1m 1s")
+    expect(html).toContain("Running for 1m 1s...")
   })
 
   test("does not show a duration when no start time is available", () => {

@@ -33,6 +33,9 @@ export function ProcessingMessage({ status, startedAt = null }: ProcessingMessag
   const label = (status ? STATUS_LABELS[status] : undefined) || "Processing..."
   const isFailed = status === "failed"
   const elapsed = startedAt == null ? null : formatElapsedDuration(Math.max(0, now - startedAt))
+  const displayLabel = elapsed
+    ? `${label.replace(/\.\.\.$/, "")} for ${elapsed}...`
+    : label
 
   return (
     <MetaRow className="ml-[1px] mt-3">
@@ -43,7 +46,7 @@ export function ProcessingMessage({ status, startedAt = null }: ProcessingMessag
           <Loader2 className="size-4.5 animate-spin text-muted-icon" />
         )}
         <AnimatedShinyText className="ml-[1px] text-sm" shimmerWidth={44}>
-          {label}{elapsed ? ` · Running for ${elapsed}` : ""}
+          {displayLabel}
         </AnimatedShinyText>
       </MetaContent>
     </MetaRow>
