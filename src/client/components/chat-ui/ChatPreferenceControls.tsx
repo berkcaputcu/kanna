@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react"
-import { Box, Brain, Gauge, ListTodo, LockOpen, Plus, Search, Sparkles, SquareMenu, SquareMinus } from "lucide-react"
+import { Box, Brain, Gauge, ListTodo, LockOpen, Plus, Search, ShieldCheck, Sparkles, SquareMenu, SquareMinus } from "lucide-react"
 import {
   resolveModelLabel,
   type AgentProvider,
@@ -212,6 +212,8 @@ interface ChatPreferenceControlsProps {
 
 const MODE_ICONS: Record<ChatMode, typeof LockOpen> = {
   "full-access": LockOpen,
+  "approval": ShieldCheck,
+  "approve-for-me": Sparkles,
   "plan": ListTodo,
   "auto-plan": Sparkles,
 }

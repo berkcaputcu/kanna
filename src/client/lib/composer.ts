@@ -206,6 +206,8 @@ export interface ComposerOptionControls {
 /** Labels/descriptions for each mode, shared by the picker and command palette. */
 export const CHAT_MODE_LABELS: Record<ChatMode, { label: string; description: string }> = {
   "full-access": { label: "Full Access", description: "Execution without approval" },
+  "approval": { label: "Approval Mode", description: "Workspace access with approval when needed" },
+  "approve-for-me": { label: "Approve for me", description: "Workspace access with automatic approval review" },
   "plan": { label: "Plan Mode", description: "Review a plan before execution" },
   "auto-plan": { label: "Auto Plan", description: "The agent decides when to plan first" },
 }
@@ -257,13 +259,19 @@ export function deriveComposerOptionControls(
     ? { enabled: Boolean(modelOptions.fastMode) }
     : null
 
-  const modeOptions: ChatMode[] = providerConfig?.supportsAutoPlanMode
+  const modeOptions: ChatMode[] = state.provider === "codex"
+    ? ["full-access", "approval", "approve-for-me", "plan"]
+    : providerConfig?.supportsAutoPlanMode
     ? ["full-access", "plan", "auto-plan"]
     : ["full-access", "plan"]
   // A composer state seeded from another harness can carry autoPlan into a
   // provider that has no Auto Plan (see getEffectiveComposerState), so clamp
   // the selection to what this provider actually offers.
-  const selectedMode = chatModeFromFlags(state.planMode, state.autoPlan)
+  const selectedMode = chatModeFromFlags(
+    state.planMode,
+    state.autoPlan,
+    state.provider === "codex" ? state.modelOptions.accessMode : undefined,
+  )
   const mode = providerConfig?.supportsPlanMode
     ? {
       selected: modeOptions.includes(selectedMode) ? selectedMode : "full-access" as ChatMode,

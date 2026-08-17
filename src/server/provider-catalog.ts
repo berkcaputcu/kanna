@@ -291,6 +291,9 @@ export function normalizeCodexModelOptions(
     // Spawn-time gating: fast mode only reaches models that support it
     // (per Codex docs: GPT-5.6/5.5/5.4 — not 5.3 Codex or Spark).
     fastMode: supportsProviderFastMode("codex", model) && modelOptions?.codex?.fastMode === true,
+    ...(modelOptions?.codex?.accessMode === "approval" || modelOptions?.codex?.accessMode === "approve-for-me" || modelOptions?.codex?.accessMode === "full-access"
+      ? { accessMode: modelOptions.codex.accessMode }
+      : {}),
   }
 }
 

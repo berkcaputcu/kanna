@@ -162,6 +162,7 @@ export interface ProviderEffortOption {
 }
 
 export type CodexReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+export type CodexAccessMode = "approval" | "approve-for-me" | "full-access"
 
 export interface CodexReasoningEffortOption extends ProviderEffortOption {
   id: CodexReasoningEffort
@@ -218,6 +219,7 @@ export interface ClaudeModelOptions {
 export interface CodexModelOptions {
   reasoningEffort: CodexReasoningEffort
   fastMode: boolean
+  accessMode?: CodexAccessMode
 }
 
 export interface CursorModelOptions {
@@ -255,12 +257,24 @@ export interface ProviderPreference<TModelOptions> {
  * swappable at runtime), autoPlan maps to the session's tool allowlist (fixed
  * at session creation).
  */
-export type ChatMode = "full-access" | "plan" | "auto-plan"
+export type ChatMode = "full-access" | "plan" | "approval" | "approve-for-me" | "auto-plan"
 
-export function chatModeFromFlags(planMode: boolean, autoPlan: boolean): ChatMode {
+export function chatModeFromFlags(
+  planMode: boolean,
+  autoPlan: boolean,
+  codexAccessMode: CodexAccessMode = "full-access",
+): ChatMode {
   // planMode wins: a user who explicitly asked to start in plan mode sees
   // "Plan Mode" even while autoPlan is held underneath.
-  return planMode ? "plan" : autoPlan ? "auto-plan" : "full-access"
+  return planMode
+    ? "plan"
+    : autoPlan
+      ? "auto-plan"
+      : codexAccessMode === "approval"
+        ? "approval"
+        : codexAccessMode === "approve-for-me"
+          ? "approve-for-me"
+          : "full-access"
 }
 
 export function chatModeToFlags(
@@ -274,6 +288,8 @@ export function chatModeToFlags(
       return { planMode: true, autoPlan: currentAutoPlan }
     case "auto-plan":
       return { planMode: false, autoPlan: true }
+    case "approval":
+    case "approve-for-me":
     case "full-access":
       return { planMode: false, autoPlan: false }
   }
@@ -1464,6 +1480,40 @@ export interface DeleteFileToolCall
 export interface SubagentTaskToolCall
   extends ToolCallBase<"subagent_task", { subagentType?: string }> { }
 
+export interface CodexCommandApprovalToolCall
+  extends ToolCallBase<"codex_command_approval", {
+    command?: string
+    cwd?: string
+    reason?: string
+  }> { }
+
+export interface CodexFileChangeApprovalToolCall
+  extends ToolCallBase<"codex_file_change_approval", {
+    reason?: string
+    grantRoot?: string
+  }> { }
+
+export interface CodexMcpApprovalToolCall
+  extends ToolCallBase<"codex_mcp_approval", {
+    serverName: string
+    message: string
+    mode: "form" | "openai/form" | "url"
+    url?: string
+    requestedSchema?: Record<string, unknown>
+    persist?: "session" | "always" | Array<"session" | "always">
+  }> { }
+
+export interface CodexPermissionsApprovalToolCall
+  extends ToolCallBase<"codex_permissions_approval", {
+    reason?: string
+    cwd?: string
+    environmentId?: string
+    permissions: {
+      network?: { enabled?: boolean } | null
+      fileSystem?: { read?: string[]; write?: string[] } | null
+    }
+  }> { }
+
 export interface McpGenericToolCall
   extends ToolCallBase<"mcp_generic", { server: string; tool: string; payload?: Record<string, unknown> }> { }
 
@@ -1484,6 +1534,10 @@ export type NormalizedToolCall =
   | EditFileToolCall
   | DeleteFileToolCall
   | SubagentTaskToolCall
+  | CodexCommandApprovalToolCall
+  | CodexFileChangeApprovalToolCall
+  | CodexMcpApprovalToolCall
+  | CodexPermissionsApprovalToolCall
   | McpGenericToolCall
   | UnknownToolCall
 
@@ -2006,5 +2060,11 @@ export interface ResolvedChatReadAnchor {
 
 export interface PendingToolSnapshot {
   toolUseId: string
-  toolKind: "ask_user_question" | "exit_plan_mode"
+  toolKind:
+    | "ask_user_question"
+    | "exit_plan_mode"
+    | "codex_command_approval"
+    | "codex_file_change_approval"
+    | "codex_mcp_approval"
+    | "codex_permissions_approval"
 }

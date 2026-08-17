@@ -4,6 +4,7 @@ import { createInterface } from "node:readline"
 import type { Readable, Writable } from "node:stream"
 import type {
   AskUserQuestionItem,
+  CodexAccessMode,
   CodexReasoningEffort,
   ContextWindowUsageSnapshot,
   ServiceTier,
@@ -38,6 +39,10 @@ import {
   type ItemStartedNotification,
   type JsonRpcResponse,
   type McpToolCallItem,
+  type McpServerElicitationRequestParams,
+  type McpServerElicitationRequestResponse,
+  type PermissionsRequestApprovalParams,
+  type PermissionsRequestApprovalResponse,
   type PlanDeltaNotification,
   type ServerNotification,
   type ServerRequest,
@@ -113,7 +118,17 @@ interface PendingTurn {
           kind: "file_change"
           params: FileChangeRequestApprovalParams
         }
-  ) => Promise<CommandExecutionApprovalDecision | FileChangeApprovalDecision>
+      | {
+          requestId: CodexRequestId
+          kind: "mcp_elicitation"
+          params: McpServerElicitationRequestParams
+        }
+      | {
+          requestId: CodexRequestId
+          kind: "permissions"
+          params: PermissionsRequestApprovalParams
+        }
+  ) => Promise<CommandExecutionApprovalDecision | FileChangeApprovalDecision | McpServerElicitationRequestResponse | PermissionsRequestApprovalResponse>
 }
 
 interface SessionContext {
@@ -122,7 +137,9 @@ interface SessionContext {
   child: CodexAppServerProcess
   pendingRequests: Map<CodexRequestId, PendingRequest<unknown>>
   pendingTurn: PendingTurn | null
+  approvalTurns: Map<string, PendingTurn>
   sessionToken: string | null
+  accessMode: CodexAccessMode
   stderrLines: string[]
   closed: boolean
 }
@@ -134,6 +151,7 @@ export interface StartCodexSessionArgs {
   serviceTier?: ServiceTier
   sessionToken: string | null
   pendingForkSessionToken?: string | null
+  accessMode?: CodexAccessMode
 }
 
 export interface StartCodexTurnArgs {
@@ -151,6 +169,7 @@ export interface StartCodexTurnArgs {
    */
   skill?: { name: string; path: string }
   planMode: boolean
+  accessMode?: CodexAccessMode
   attributionEnabled?: boolean
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   onApprovalRequest?: PendingTurn["onApprovalRequest"]
@@ -195,6 +214,24 @@ function isRecoverableResumeError(error: unknown): boolean {
   return ["not found", "missing thread", "no such thread", "unknown thread", "does not exist"].some((snippet) =>
     message.includes(snippet)
   )
+}
+
+function codexPolicy(accessMode: CodexAccessMode = "full-access") {
+  if (accessMode === "approval") {
+    return {
+      approvalPolicy: "on-request" as const,
+      sandbox: "workspace-write" as const,
+      approvalsReviewer: "user" as const,
+    }
+  }
+  if (accessMode === "approve-for-me") {
+    return {
+      approvalPolicy: "on-request" as const,
+      sandbox: "workspace-write" as const,
+      approvalsReviewer: "auto_review" as const,
+    }
+  }
+  return { approvalPolicy: "never" as const, sandbox: "danger-full-access" as const }
 }
 
 const MULTI_SELECT_HINT_PATTERN = /\b(all that apply|select all|choose all|pick all|select multiple|choose multiple|pick multiple|multiple selections?|multiple choice|more than one|one or more)\b/i
@@ -744,7 +781,9 @@ export class CodexAppServerManager {
       child,
       pendingRequests: new Map(),
       pendingTurn: null,
+      approvalTurns: new Map(),
       sessionToken: null,
+      accessMode: "full-access",
       stderrLines: [],
       closed: false,
     }
@@ -752,7 +791,10 @@ export class CodexAppServerManager {
     try {
       await this.sendRequest(context, "initialize", {
         clientInfo: { name: "kanna_desktop", title: "Kanna", version: "0.1.0" },
-        capabilities: { experimentalApi: true },
+        capabilities: {
+          experimentalApi: true,
+          extensions: { "openai/form": {} },
+        },
       } satisfies InitializeParams)
       this.writeMessage(context, { method: "initialized" })
       return await this.sendRequest<GetAccountRateLimitsResponse>(
@@ -771,8 +813,9 @@ export class CodexAppServerManager {
   }
 
   async startSession(args: StartCodexSessionArgs) {
+    const accessMode = args.accessMode ?? "full-access"
     const existing = this.sessions.get(args.chatId)
-    if (existing && !existing.closed && existing.cwd === args.cwd && !args.pendingForkSessionToken) {
+    if (existing && !existing.closed && existing.cwd === args.cwd && existing.accessMode === accessMode && !args.pendingForkSessionToken) {
       return
     }
 
@@ -787,7 +830,9 @@ export class CodexAppServerManager {
       child,
       pendingRequests: new Map(),
       pendingTurn: null,
+      approvalTurns: new Map(),
       sessionToken: null,
+      accessMode,
       stderrLines: [],
       closed: false,
     }
@@ -802,6 +847,7 @@ export class CodexAppServerManager {
       },
       capabilities: {
         experimentalApi: true,
+        extensions: { "openai/form": {} },
       },
     } satisfies InitializeParams)
     this.writeMessage(context, {
@@ -812,8 +858,7 @@ export class CodexAppServerManager {
       model: args.model,
       cwd: args.cwd,
       serviceTier: args.serviceTier,
-      approvalPolicy: "never",
-      sandbox: "danger-full-access",
+      ...codexPolicy(accessMode),
       experimentalRawEvents: false,
       persistExtendedHistory: false,
     } satisfies ThreadStartParams
@@ -829,8 +874,7 @@ export class CodexAppServerManager {
         model: args.model,
         cwd: args.cwd,
         serviceTier: args.serviceTier,
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
+        ...codexPolicy(accessMode),
         persistExtendedHistory: false,
       } satisfies ThreadForkParams)
     } else if (args.sessionToken) {
@@ -840,8 +884,7 @@ export class CodexAppServerManager {
           model: args.model,
           cwd: args.cwd,
           serviceTier: args.serviceTier,
-          approvalPolicy: "never",
-          sandbox: "danger-full-access",
+          ...codexPolicy(accessMode),
           persistExtendedHistory: false,
         } satisfies ThreadResumeParams)
       } catch (error) {
@@ -863,7 +906,15 @@ export class CodexAppServerManager {
   async startTurn(args: StartCodexTurnArgs): Promise<HarnessTurn> {
     const context = this.requireSession(args.chatId)
     if (context.pendingTurn) {
-      throw new Error("Codex turn is already running")
+      if (!context.pendingTurn.resolved) {
+        throw new Error("Codex turn is already running")
+      }
+      context.pendingTurn = null
+      context.approvalTurns.clear()
+    } else {
+      // A completed turn may still own a late approval request. A new turn
+      // supersedes that callback owner before its own approval lifecycle starts.
+      context.approvalTurns.clear()
     }
 
     const queue = new AsyncQueue<HarnessEvent>()
@@ -908,7 +959,7 @@ export class CodexAppServerManager {
       const response = await this.sendRequest<TurnStartResponse>(context, "turn/start", {
         threadId: context.sessionToken ?? "",
         input,
-        approvalPolicy: "never",
+        ...codexPolicy(args.accessMode),
         model: args.model,
         effort: args.effort,
         serviceTier: args.serviceTier,
@@ -928,8 +979,10 @@ export class CodexAppServerManager {
       } satisfies TurnStartParams)
       if (context.pendingTurn) {
         context.pendingTurn.turnId = response.turn.id
+        context.approvalTurns.set(response.turn.id, context.pendingTurn)
       } else {
         pendingTurn.turnId = response.turn.id
+        context.approvalTurns.set(response.turn.id, pendingTurn)
       }
     } catch (error) {
       context.pendingTurn = null
@@ -1029,6 +1082,7 @@ export class CodexAppServerManager {
     if (!context) return
     context.closed = true
     context.pendingTurn?.queue.finish()
+    context.approvalTurns.clear()
     this.sessions.delete(chatId)
     try {
       context.child.kill("SIGKILL")
@@ -1064,7 +1118,42 @@ export class CodexAppServerManager {
         }
 
         if (isServerRequest(parsed)) {
-          void this.handleServerRequest(context, parsed)
+          void this.handleServerRequest(context, parsed).catch((error) => {
+            if (context.closed) return
+
+            const message = error instanceof Error ? error.message : String(error)
+            try {
+              if (
+                parsed.method === "item/commandExecution/requestApproval"
+                || parsed.method === "item/fileChange/requestApproval"
+              ) {
+                // Every approval request needs a response. A cancellation lets
+                // the app-server unwind instead of waiting forever when the
+                // chat was cleaned up while this request was in flight.
+                this.writeMessage(context, {
+                  id: parsed.id,
+                  result: { decision: "cancel" },
+                })
+              } else if (parsed.method === "mcpServer/elicitation/request") {
+                this.writeMessage(context, {
+                  id: parsed.id,
+                  result: { action: "cancel", content: null },
+                })
+              } else if (parsed.method === "item/permissions/requestApproval") {
+                this.writeMessage(context, {
+                  id: parsed.id,
+                  result: { scope: "turn", permissions: {} },
+                })
+              } else {
+                this.writeMessage(context, {
+                  id: parsed.id,
+                  error: { message },
+                })
+              }
+            } catch {
+              // The child may have exited between the request and fallback.
+            }
+          })
           continue
         }
 
@@ -1109,14 +1198,28 @@ export class CodexAppServerManager {
   }
 
   private async handleServerRequest(context: SessionContext, request: ServerRequest) {
+    const requestParams = asRecord(request.params)
+    const requestTurnId = typeof requestParams?.turnId === "string" ? requestParams.turnId : null
     const pendingTurn = context.pendingTurn
+      ?? (requestTurnId ? context.approvalTurns.get(requestTurnId) : undefined)
+      ?? (request.method === "mcpServer/elicitation/request"
+        ? [...context.approvalTurns.values()].at(-1)
+        : undefined)
     if (!pendingTurn) {
-      this.writeMessage(context, {
-        id: request.id,
-        error: {
-          message: "No active turn",
-        },
-      })
+      if (request.method === "item/commandExecution/requestApproval" || request.method === "item/fileChange/requestApproval") {
+        this.writeMessage(context, { id: request.id, result: { decision: "cancel" } })
+      } else if (request.method === "mcpServer/elicitation/request") {
+        this.writeMessage(context, { id: request.id, result: { action: "cancel", content: null } })
+      } else if (request.method === "item/permissions/requestApproval") {
+        this.writeMessage(context, { id: request.id, result: { scope: "turn", permissions: {} } })
+      } else {
+        this.writeMessage(context, {
+          id: request.id,
+          error: {
+            message: "No active turn",
+          },
+        })
+      }
       return
     }
 
@@ -1226,11 +1329,27 @@ export class CodexAppServerManager {
     }
 
     if (request.method === "item/commandExecution/requestApproval") {
+      const tool = {
+        kind: "tool" as const,
+        toolKind: "codex_command_approval" as const,
+        toolName: "CodexApproval",
+        toolId: String(request.id),
+        input: {
+          command: request.params.command ?? undefined,
+          cwd: request.params.cwd ?? undefined,
+          reason: request.params.reason ?? undefined,
+        },
+        rawInput: request.params as unknown as Record<string, unknown>,
+      }
+      pendingTurn.queue.push({
+        type: "transcript",
+        entry: timestamped({ kind: "tool_call", tool }),
+      })
       const decision = await pendingTurn.onApprovalRequest?.({
         requestId: request.id,
         kind: "command_execution",
         params: request.params,
-      }) ?? "decline"
+      }) as CommandExecutionApprovalDecision | undefined ?? "decline"
       this.writeMessage(context, {
         id: request.id,
         result: {
@@ -1240,11 +1359,94 @@ export class CodexAppServerManager {
       return
     }
 
+    if (request.method === "mcpServer/elicitation/request") {
+      const elicitation = request.params.request
+      const meta = elicitation.meta
+      const persist = meta?.persist === "session" || meta?.persist === "always"
+        ? meta.persist
+        : Array.isArray(meta?.persist)
+          ? meta.persist.filter((value): value is "session" | "always" => value === "session" || value === "always")
+          : undefined
+      const tool = {
+        kind: "tool" as const,
+        toolKind: "codex_mcp_approval" as const,
+        toolName: "CodexAppApproval",
+        toolId: String(request.id),
+        input: {
+          serverName: request.params.serverName,
+          message: elicitation.message,
+          mode: elicitation.mode,
+          ...(elicitation.mode === "url" ? { url: elicitation.url } : { requestedSchema: elicitation.requestedSchema }),
+          ...(persist === "session" || persist === "always" || Array.isArray(persist) ? { persist } : {}),
+        },
+        rawInput: request.params as unknown as Record<string, unknown>,
+      }
+      pendingTurn.queue.push({
+        type: "transcript",
+        entry: timestamped({ kind: "tool_call", tool }),
+      })
+      const response = await pendingTurn.onApprovalRequest?.({
+        requestId: request.id,
+        kind: "mcp_elicitation",
+        params: request.params,
+      }) ?? { action: "decline" as const, content: null }
+      this.writeMessage(context, {
+        id: request.id,
+        result: response,
+      })
+      return
+    }
+
+    if (request.method === "item/permissions/requestApproval") {
+      const tool = {
+        kind: "tool" as const,
+        toolKind: "codex_permissions_approval" as const,
+        toolName: "CodexPermissionsApproval",
+        toolId: String(request.id),
+        input: {
+          reason: request.params.reason ?? undefined,
+          cwd: request.params.cwd ?? undefined,
+          environmentId: request.params.environmentId ?? undefined,
+          permissions: request.params.permissions,
+        },
+        rawInput: request.params as unknown as Record<string, unknown>,
+      }
+      pendingTurn.queue.push({
+        type: "transcript",
+        entry: timestamped({ kind: "tool_call", tool }),
+      })
+      const response = await pendingTurn.onApprovalRequest?.({
+        requestId: request.id,
+        kind: "permissions",
+        params: request.params,
+      }) ?? { scope: "turn" as const, permissions: {} }
+      this.writeMessage(context, {
+        id: request.id,
+        result: response,
+      })
+      return
+    }
+
+    const tool = {
+      kind: "tool" as const,
+      toolKind: "codex_file_change_approval" as const,
+      toolName: "CodexApproval",
+      toolId: String(request.id),
+      input: {
+        reason: request.params.reason ?? undefined,
+        grantRoot: request.params.grantRoot ?? undefined,
+      },
+      rawInput: request.params as unknown as Record<string, unknown>,
+    }
+    pendingTurn.queue.push({
+      type: "transcript",
+      entry: timestamped({ kind: "tool_call", tool }),
+    })
     const decision = await pendingTurn.onApprovalRequest?.({
       requestId: request.id,
       kind: "file_change",
       params: request.params,
-    }) ?? "decline"
+    }) as FileChangeApprovalDecision | undefined ?? "decline"
     this.writeMessage(context, {
       id: request.id,
       result: {
@@ -1519,6 +1721,7 @@ export class CodexAppServerManager {
       pending.reject(new Error(message))
     }
     context.pendingRequests.clear()
+    context.approvalTurns.clear()
     context.closed = true
   }
 

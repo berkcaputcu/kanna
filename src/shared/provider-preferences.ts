@@ -37,6 +37,7 @@ export type ProviderModelOptionsInput = {
   reasoningEffort?: unknown
   contextWindow?: unknown
   fastMode?: unknown
+  accessMode?: unknown
 }
 
 /**
@@ -94,6 +95,9 @@ export function normalizeCodexPreference(value?: ProviderPreferenceInput): Provi
       fastMode: typeof value?.modelOptions?.fastMode === "boolean"
         ? value.modelOptions.fastMode
         : DEFAULT_CODEX_MODEL_OPTIONS.fastMode,
+      ...(value?.modelOptions?.accessMode === "approval" || value?.modelOptions?.accessMode === "approve-for-me" || value?.modelOptions?.accessMode === "full-access"
+        ? { accessMode: value.modelOptions.accessMode }
+        : {}),
     },
     planMode: value?.planMode === true,
     autoPlan: false,

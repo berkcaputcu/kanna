@@ -115,6 +115,19 @@ export function useChatCommands(params: {
     }, { keepCommandError: true })
   }, [activeChatId, wrapCommand])
 
+  const handleCodexApproval = useCallback(async (
+    toolUseId: string,
+    decision: "accept" | "acceptForSession" | "decline",
+  ) => {
+    if (!activeChatId) return
+    await wrapCommand({
+      type: "chat.respondTool",
+      chatId: activeChatId,
+      toolUseId,
+      result: { decision },
+    }, { keepCommandError: true })
+  }, [activeChatId, wrapCommand])
+
   const handleCopyPath = useCallback(async (localPath: string) => {
     try {
       if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
@@ -199,6 +212,7 @@ export function useChatCommands(params: {
     handleRenameProject,
     handleAskUserQuestion,
     handleExitPlanMode,
+    handleCodexApproval,
     handleCopyPath,
     handleOpenExternal,
     handleOpenLocalLink,

@@ -4,6 +4,7 @@ import type {
   AgentProvider,
   ChatAttachment,
   ChatSkillsSnapshot,
+  CodexAccessMode,
   CodexReasoningEffort,
   ContextWindowUsageSnapshot,
   HarnessSkill,
@@ -105,7 +106,15 @@ export function claudeToolset(autoPlan: boolean): string[] {
 
 interface PendingToolRequest {
   toolUseId: string
-  tool: NormalizedToolCall & { toolKind: "ask_user_question" | "exit_plan_mode" }
+  tool: NormalizedToolCall & {
+    toolKind:
+      | "ask_user_question"
+      | "exit_plan_mode"
+      | "codex_command_approval"
+      | "codex_file_change_approval"
+      | "codex_mcp_approval"
+      | "codex_permissions_approval"
+  }
   resolve: (result: unknown) => void
 }
 
@@ -120,7 +129,7 @@ interface ActiveTurn {
   planMode: boolean
   autoPlan: boolean
   status: KannaStatus
-  pendingTool: PendingToolRequest | null
+  pendingTools: Map<string, PendingToolRequest>
   postToolFollowUp: { content: string; planMode: boolean } | null
   hasFinalResult: boolean
   cancelRequested: boolean
@@ -325,13 +334,33 @@ export function buildPromptText(content: string, attachments: ChatAttachment[]) 
 }
 
 function discardedToolResult(
-  tool: NormalizedToolCall & { toolKind: "ask_user_question" | "exit_plan_mode" }
+  tool: NormalizedToolCall & {
+    toolKind:
+      | "ask_user_question"
+      | "exit_plan_mode"
+      | "codex_command_approval"
+      | "codex_file_change_approval"
+      | "codex_mcp_approval"
+      | "codex_permissions_approval"
+  }
 ) {
   if (tool.toolKind === "ask_user_question") {
     return {
       discarded: true,
       answers: {},
     }
+  }
+
+  if (tool.toolKind === "codex_command_approval" || tool.toolKind === "codex_file_change_approval") {
+    return { decision: "cancel" }
+  }
+
+  if (tool.toolKind === "codex_mcp_approval") {
+    return { action: "cancel", content: null }
+  }
+
+  if (tool.toolKind === "codex_permissions_approval") {
+    return { scope: "turn", permissions: {} }
   }
 
   return {
@@ -845,6 +874,12 @@ export class AgentCoordinator {
   private onClaudeRateLimit: ((info: ClaudeRateLimitInfoRaw) => void) | null = null
   private cursorModelCatalogApplied = false
   readonly activeTurns = new Map<string, ActiveTurn>()
+  /**
+   * Codex can deliver an approval request just after its completion event.
+   * Keep the completed turn available as an approval owner until a new turn,
+   * explicit cancellation, or session shutdown supersedes it.
+   */
+  readonly completedApprovalTurns = new Map<string, ActiveTurn>()
   readonly drainingStreams = new Map<string, { turn: HarnessTurn }>()
   readonly claudeSessions = new Map<string, ClaudeSessionState>()
 
@@ -917,11 +952,14 @@ export class AgentCoordinator {
     for (const [chatId, turn] of this.activeTurns.entries()) {
       statuses.set(chatId, turn.status)
     }
+    for (const [chatId, turn] of this.completedApprovalTurns.entries()) {
+      if (!statuses.has(chatId) && turn.pendingTools.size > 0) statuses.set(chatId, turn.status)
+    }
     return statuses
   }
 
   getPendingTool(chatId: string): PendingToolSnapshot | null {
-    const pending = this.activeTurns.get(chatId)?.pendingTool
+    const pending = (this.activeTurns.get(chatId) ?? this.completedApprovalTurns.get(chatId))?.pendingTools.values().next().value
     if (!pending) return null
     return { toolUseId: pending.toolUseId, toolKind: pending.tool.toolKind }
   }
@@ -980,6 +1018,11 @@ export class AgentCoordinator {
 
   async closeChat(chatId: string) {
     await this.stopDraining(chatId)
+    const completed = this.completedApprovalTurns.get(chatId)
+    if (completed) {
+      await this.discardPendingTools(completed)
+      this.completedApprovalTurns.delete(chatId)
+    }
     const claudeSession = this.claudeSessions.get(chatId)
     if (claudeSession) {
       claudeSession.session.close()
@@ -1042,6 +1085,7 @@ export class AgentCoordinator {
       serviceTier: serviceTierFromModelOptions(modelOptions),
       planMode: catalog.supportsPlanMode ? Boolean(options.planMode) : false,
       autoPlan: catalog.supportsAutoPlanMode ? Boolean(options.autoPlan) : false,
+      accessMode: modelOptions.accessMode,
     }
   }
 
@@ -1072,6 +1116,7 @@ export class AgentCoordinator {
       model: settings.model,
       effort: settings.effort,
       serviceTier: settings.serviceTier,
+      accessMode: settings.accessMode,
       planMode: settings.planMode,
       autoPlan: settings.autoPlan,
       appendUserPrompt: true,
@@ -1171,6 +1216,7 @@ export class AgentCoordinator {
     cwd: string
     model: string
     serviceTier?: "fast"
+    accessMode?: CodexAccessMode
     sessionToken: string | null | undefined
     pendingForkSessionToken: string | null | undefined
   }): Promise<boolean> {
@@ -1193,6 +1239,7 @@ export class AgentCoordinator {
             serviceTier: args.serviceTier,
             sessionToken: args.sessionToken,
             pendingForkSessionToken: null,
+            accessMode: args.accessMode,
           })
           return started?.resumeFellBack === true
         } catch {
@@ -1243,6 +1290,7 @@ export class AgentCoordinator {
     model: string
     effort?: string
     serviceTier?: "fast"
+    accessMode?: CodexAccessMode
     planMode: boolean
     autoPlan: boolean
     appendUserPrompt: boolean
@@ -1306,6 +1354,7 @@ export class AgentCoordinator {
         serviceTier: args.serviceTier,
         sessionToken: chat.sessionToken,
         pendingForkSessionToken: chat.pendingForkSessionToken,
+        accessMode: args.accessMode,
       })
       ? await this.prepareSessionRestore(args.chatId, args.provider, existingMessages)
       : null
@@ -1325,19 +1374,34 @@ export class AgentCoordinator {
 
     const onToolRequest = async (request: HarnessToolRequest): Promise<unknown> => {
       const active = this.activeTurns.get(args.chatId)
-      if (!active) {
-        throw new Error("Chat turn ended unexpectedly")
+      const completed = active ? null : this.completedApprovalTurns.get(args.chatId)
+      const owner = active ?? completed
+      if (!owner) {
+        // A provider can emit a request just as its result is being drained.
+        // There is no UI turn left to wait on in that case, so resolve it as a
+        // discarded request instead of leaving the provider's RPC hanging.
+        return discardedToolResult(request.tool)
       }
 
-      active.status = "waiting_for_user"
+      if (completed) {
+        // The normal Codex queue is already finished for a late approval, so
+        // persist the tool call here instead of trying to push into that queue.
+        await this.store.appendMessage(args.chatId, timestamped({
+          kind: "tool_call",
+          tool: request.tool,
+        }))
+      }
+
+      owner.status = "waiting_for_user"
       this.emitStateChange(args.chatId)
 
       return await new Promise<unknown>((resolve) => {
-        active.pendingTool = {
+        const pending = {
           toolUseId: request.tool.toolId,
           tool: request.tool,
           resolve,
         }
+        owner.pendingTools.set(pending.toolUseId, pending)
       })
     }
 
@@ -1442,6 +1506,7 @@ export class AgentCoordinator {
         serviceTier: args.serviceTier,
         sessionToken: chat.sessionToken,
         pendingForkSessionToken: chat.pendingForkSessionToken,
+        accessMode: args.accessMode,
       })
       if (chat.pendingForkSessionToken && started?.sessionToken) {
         await this.store.setPendingForkSessionToken(args.chatId, null)
@@ -1456,8 +1521,106 @@ export class AgentCoordinator {
         effort: args.effort as CodexReasoningEffort | undefined,
         serviceTier: args.serviceTier,
         planMode: args.planMode,
+        accessMode: args.accessMode,
         attributionEnabled: this.gitAttributionEnabled(),
         onToolRequest,
+        onApprovalRequest: async (request) => {
+          if (request.kind === "permissions") {
+            const tool = {
+              kind: "tool" as const,
+              toolKind: "codex_permissions_approval" as const,
+              toolName: "CodexPermissionsApproval",
+              toolId: String(request.requestId),
+              input: {
+                reason: request.params.reason ?? undefined,
+                cwd: request.params.cwd ?? undefined,
+                environmentId: request.params.environmentId ?? undefined,
+                permissions: request.params.permissions,
+              },
+              rawInput: request.params as unknown as Record<string, unknown>,
+            }
+            const result = await onToolRequest({ tool })
+            const decision = result && typeof result === "object"
+              ? (result as { decision?: unknown }).decision
+              : result
+            const accepted = decision === "accept" || decision === "acceptForSession"
+            return {
+              scope: decision === "acceptForSession" ? "session" : "turn",
+              permissions: accepted ? request.params.permissions : {},
+            }
+          }
+
+          if (request.kind === "mcp_elicitation") {
+            const elicitation = request.params.request
+            const persist: "session" | "always" | Array<"session" | "always"> | undefined = elicitation.meta?.persist === "session" || elicitation.meta?.persist === "always"
+              ? elicitation.meta.persist as "session" | "always"
+              : Array.isArray(elicitation.meta?.persist)
+                ? elicitation.meta.persist.filter((value): value is "session" | "always" => value === "session" || value === "always")
+                : undefined
+            const tool = {
+              kind: "tool" as const,
+              toolKind: "codex_mcp_approval" as const,
+              toolName: "CodexAppApproval",
+              toolId: String(request.requestId),
+              input: {
+                serverName: request.params.serverName,
+                message: elicitation.message,
+                mode: elicitation.mode,
+                ...(elicitation.mode === "url" ? { url: elicitation.url } : { requestedSchema: elicitation.requestedSchema }),
+                ...(persist === "session" || persist === "always" || Array.isArray(persist) ? { persist } : {}),
+              },
+              rawInput: request.params as unknown as Record<string, unknown>,
+            }
+            const result = await onToolRequest({ tool })
+            const record = result && typeof result === "object" ? result as Record<string, unknown> : {}
+            const action = record.action
+              ?? (record.decision === "accept" || record.decision === "acceptForSession" ? "accept" : record.decision)
+            return {
+              action: action === "accept" || action === "decline" || action === "cancel" ? action : "decline",
+              content: record.content && typeof record.content === "object" && !Array.isArray(record.content)
+                ? record.content as Record<string, unknown>
+                : null,
+              meta: record.meta && typeof record.meta === "object" && !Array.isArray(record.meta)
+                ? record.meta as Record<string, unknown>
+                : null,
+            }
+          }
+
+          const tool = request.kind === "command_execution"
+            ? {
+                kind: "tool" as const,
+                toolKind: "codex_command_approval" as const,
+                toolName: "CodexApproval",
+                toolId: String(request.requestId),
+                input: {
+                  command: request.params.command ?? undefined,
+                  cwd: request.params.cwd ?? undefined,
+                  reason: request.params.reason ?? undefined,
+                },
+                rawInput: request.params as unknown as Record<string, unknown>,
+              }
+            : {
+                kind: "tool" as const,
+                toolKind: "codex_file_change_approval" as const,
+                toolName: "CodexApproval",
+                toolId: String(request.requestId),
+                input: {
+                  reason: request.params.reason ?? undefined,
+                  grantRoot: request.params.grantRoot ?? undefined,
+                },
+                rawInput: request.params as unknown as Record<string, unknown>,
+              }
+          const result = await onToolRequest({ tool })
+          const decision = result && typeof result === "object"
+            ? (result as { decision?: unknown }).decision
+            : result
+          return decision === "accept"
+            || decision === "acceptForSession"
+            || decision === "decline"
+            || decision === "cancel"
+            ? decision
+            : "decline"
+        },
       })
     }
 
@@ -1471,7 +1634,7 @@ export class AgentCoordinator {
       planMode: args.planMode,
       autoPlan: args.autoPlan,
       status: args.provider === "claude" ? "running" : "starting",
-      pendingTool: null,
+      pendingTools: new Map(),
       postToolFollowUp: null,
       hasFinalResult: false,
       cancelRequested: false,
@@ -1645,7 +1808,8 @@ export class AgentCoordinator {
     if (chat.archivedAt) {
       await this.store.unarchiveChat(chatId)
     }
-    if (this.activeTurns.has(chatId)) {
+    const completedApproval = this.completedApprovalTurns.get(chatId)
+    if (this.activeTurns.has(chatId) || (completedApproval && completedApproval.pendingTools.size > 0)) {
       const queuedMessage = await this.enqueueMessage(chatId, command.content, command.attachments ?? [], {
         provider: command.provider,
         model: command.model,
@@ -1655,6 +1819,12 @@ export class AgentCoordinator {
         autoPlan: command.autoPlan,
       })
       return { chatId, queuedMessageId: queuedMessage.id, queued: true as const }
+    }
+    if (completedApproval) {
+      // No approval is currently waiting. A new turn supersedes the retained
+      // callback owner, and the app-server will clear its matching handler
+      // when that turn starts.
+      this.completedApprovalTurns.delete(chatId)
     }
 
     const provider = this.resolveProvider(command, chat.provider)
@@ -1667,6 +1837,7 @@ export class AgentCoordinator {
       model: settings.model,
       effort: settings.effort,
       serviceTier: settings.serviceTier,
+      accessMode: settings.accessMode,
       planMode: settings.planMode,
       autoPlan: settings.autoPlan,
       appendUserPrompt: true,
@@ -1864,7 +2035,7 @@ export class AgentCoordinator {
       planMode: session.planMode,
       autoPlan: session.autoPlan,
       status: "running",
-      pendingTool: null,
+      pendingTools: new Map(),
       postToolFollowUp: null,
       hasFinalResult: false,
       cancelRequested: false,
@@ -2065,10 +2236,25 @@ export class AgentCoordinator {
 
         if (event.entry.kind === "result") {
           active.hasFinalResult = true
+          // Codex may have emitted an approval request concurrently with its
+          // completion event. Keep those requests visible instead of turning
+          // them into an automatic cancellation while the stream is drained.
+          if (active.provider !== "codex") {
+            await this.discardPendingTools(active)
+          }
           if (event.entry.isError) {
             await this.store.recordTurnFailed(active.chatId, event.entry.result || "Turn failed")
           } else if (!active.cancelRequested) {
             await this.store.recordTurnFinished(active.chatId)
+          }
+          if (active.provider === "codex") {
+            this.completedApprovalTurns.set(active.chatId, active)
+            if (active.pendingTools.size > 0) {
+              active.status = "waiting_for_user"
+              this.activeTurns.delete(active.chatId)
+              this.emitStateChange(active.chatId)
+              continue
+            }
           }
           // Remove from activeTurns as soon as the result arrives so the UI
           // transitions to idle immediately. The stream may still be open
@@ -2164,6 +2350,24 @@ export class AgentCoordinator {
     }
   }
 
+  private async discardPendingTools(active: ActiveTurn) {
+    const pendingTools = [...active.pendingTools.values()]
+    active.pendingTools.clear()
+
+    for (const pendingTool of pendingTools) {
+      const result = discardedToolResult(pendingTool.tool)
+      await this.store.appendMessage(
+        active.chatId,
+        timestamped({
+          kind: "tool_result",
+          toolId: pendingTool.toolUseId,
+          content: result,
+        })
+      )
+      pendingTool.resolve(result)
+    }
+  }
+
   async cancel(chatId: string, options?: { hideInterrupted?: boolean }) {
     // Also clean up any draining stream for this chat.
     const draining = this.drainingStreams.get(chatId)
@@ -2173,6 +2377,15 @@ export class AgentCoordinator {
     }
 
     const active = this.activeTurns.get(chatId)
+    const completed = active ? null : this.completedApprovalTurns.get(chatId)
+    if (!active && !completed) return
+    if (completed) {
+      await this.discardPendingTools(completed)
+      this.completedApprovalTurns.delete(chatId)
+      this.emitStateChange(chatId)
+      await this.maybeStartNextQueuedMessage(chatId)
+      return
+    }
     if (!active) return
 
     logClaudeSteer("cancel_requested", {
@@ -2198,10 +2411,10 @@ export class AgentCoordinator {
       }
     }
 
-    const pendingTool = active.pendingTool
-    active.pendingTool = null
+    const pendingTools = [...active.pendingTools.values()]
+    active.pendingTools.clear()
 
-    if (pendingTool) {
+    for (const pendingTool of pendingTools) {
       const result = discardedToolResult(pendingTool.tool)
       await this.store.appendMessage(
         chatId,
@@ -2211,7 +2424,7 @@ export class AgentCoordinator {
           content: result,
         })
       )
-      if (active.provider === "codex" && pendingTool.tool.toolKind === "exit_plan_mode") {
+      if (active.provider === "codex") {
         pendingTool.resolve(result)
       }
     }
@@ -2247,14 +2460,20 @@ export class AgentCoordinator {
 
   async respondTool(command: Extract<ClientCommand, { type: "chat.respondTool" }>) {
     const active = this.activeTurns.get(command.chatId)
-    if (!active || !active.pendingTool) {
+    const completed = active ? null : this.completedApprovalTurns.get(command.chatId)
+    const owner = active ?? completed
+    if (!owner) {
       throw new Error("No pending tool request")
     }
 
-    const pending = active.pendingTool
-    if (pending.toolUseId !== command.toolUseId) {
+    const pending = owner.pendingTools.get(command.toolUseId)
+    if (!pending) {
       throw new Error("Tool response does not match active request")
     }
+
+    // Claim this request before awaiting persistence so duplicate responses
+    // cannot both resolve the same harness request.
+    owner.pendingTools.delete(command.toolUseId)
 
     await this.store.appendMessage(
       command.chatId,
@@ -2265,8 +2484,7 @@ export class AgentCoordinator {
       })
     )
 
-    active.pendingTool = null
-    active.status = "running"
+    owner.status = owner.pendingTools.size > 0 ? "waiting_for_user" : "running"
 
     if (pending.tool.toolKind === "exit_plan_mode") {
       const result = (command.result ?? {}) as {
@@ -2279,8 +2497,8 @@ export class AgentCoordinator {
         await this.store.appendMessage(command.chatId, timestamped({ kind: "context_cleared" }))
       }
 
-      if (active.provider === "codex") {
-        active.postToolFollowUp = result.confirmed
+      if (owner.provider === "codex") {
+        owner.postToolFollowUp = result.confirmed
           ? {
               content: result.message
                 ? `Proceed with the approved plan. Additional guidance: ${result.message}`
