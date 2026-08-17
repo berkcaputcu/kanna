@@ -492,6 +492,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(projectFileContentResponse)
           }
 
+          const localFileContentResponse = await handleLocalFileContent(req, url)
+          if (localFileContentResponse) {
+            return withOriginAgentCluster(localFileContentResponse)
+          }
+
           return withOriginAgentCluster(serveStatic(distDir, url.pathname))
         },
         websocket: {
@@ -735,6 +740,49 @@ async function handleProjectFileContent(req: Request, url: URL, store: EventStor
   return new Response(file, {
     headers: {
       "Content-Type": inferProjectFileContentType(relativePath, file.type),
+    },
+  })
+}
+
+/**
+ * Serve a local file that an agent linked from outside the active project.
+ * Project-relative links use handleProjectFileContent above; this endpoint is
+ * deliberately separate so that its broader path input cannot weaken that
+ * endpoint's project-root traversal checks.
+ */
+async function handleLocalFileContent(req: Request, url: URL) {
+  if (url.pathname !== "/api/local-files/content") {
+    return null
+  }
+
+  if (req.method !== "GET") {
+    return new Response(null, {
+      status: 405,
+      headers: {
+        Allow: "GET",
+      },
+    })
+  }
+
+  const requestedPath = url.searchParams.get("path")?.trim()
+  if (!requestedPath || !path.isAbsolute(requestedPath)) {
+    return Response.json({ error: "An absolute local file path is required" }, { status: 400 })
+  }
+
+  const filePath = path.resolve(requestedPath)
+  const file = Bun.file(filePath)
+  try {
+    const info = await stat(filePath)
+    if (!info.isFile()) {
+      return Response.json({ error: "File not found" }, { status: 404 })
+    }
+  } catch {
+    return Response.json({ error: "File not found" }, { status: 404 })
+  }
+
+  return new Response(file, {
+    headers: {
+      "Content-Type": inferProjectFileContentType(filePath, file.type),
     },
   })
 }

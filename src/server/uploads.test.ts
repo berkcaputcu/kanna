@@ -159,6 +159,42 @@ describe("uploads", () => {
     }
   })
 
+  test("serves previewable local files outside the active project", async () => {
+    const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-project-local-file-"))
+    const outsideDir = await mkdtemp(path.join(tmpdir(), "kanna-outside-local-file-"))
+    const outsideFile = path.join(outsideDir, "outside.ts")
+    tempDirs.push(projectDir)
+    tempDirs.push(outsideDir)
+    await Bun.write(outsideFile, "export const outside = true\n")
+
+    const server = await startIsolatedServer({ port: 4315 })
+
+    try {
+      const encodedPath = encodeURIComponent(outsideFile)
+      const response = await fetch(`http://localhost:${server.port}/api/local-files/content?path=${encodedPath}`)
+      expect(response.status).toBe(200)
+      expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8")
+      expect(await response.text()).toBe("export const outside = true\n")
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test("rejects invalid local file content requests", async () => {
+    const server = await startIsolatedServer({ port: 4316 })
+
+    try {
+      const missingPath = await fetch(`http://localhost:${server.port}/api/local-files/content?path=${encodeURIComponent("relative.ts")}`)
+      expect(missingPath.status).toBe(400)
+
+      const wrongMethod = await fetch(`http://localhost:${server.port}/api/local-files/content?path=${encodeURIComponent("/tmp/example.ts")}`, { method: "POST" })
+      expect(wrongMethod.status).toBe(405)
+      expect(wrongMethod.headers.get("allow")).toBe("GET")
+    } finally {
+      await server.stop()
+    }
+  })
+
   test("rejects non-GET requests for attachment content", async () => {
     const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-project-content-method-"))
     tempDirs.push(projectDir)

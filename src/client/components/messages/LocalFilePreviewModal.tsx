@@ -35,7 +35,9 @@ export function LocalFilePreviewModal({ projectId, projectPath, target, onOpenCh
   )
   const contentUrl = projectId && relativePath
     ? `/api/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(relativePath)}/content`
-    : null
+    : target
+      ? `/api/local-files/content?path=${encodeURIComponent(target.path)}`
+      : null
   const [previewState, setPreviewState] = useState<PreviewState>({ status: "idle" })
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle")
 

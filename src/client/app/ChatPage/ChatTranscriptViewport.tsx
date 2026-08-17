@@ -20,7 +20,7 @@ import { TRANSCRIPT_PADDING_BOTTOM_OFFSET } from "../kannaStateHelpers"
 import { useScrollbarGutterVar } from "../../hooks/useScrollbarGutterVar"
 import { cn } from "../../lib/utils"
 import type { ChatJumpRole } from "../../lib/chat-navigation"
-import { formatPathWithTilde, getProjectRelativePath, shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
+import { formatPathWithTilde, shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
 import {
   buildResolvedTranscriptRows,
   KannaTranscriptRow,
@@ -754,12 +754,10 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
 
   const handleOpenLocalLinkClick = useCallback((target: OpenLocalLinkTarget) => {
     if (target.trigger !== "contextmenu") {
-      const relativePath = getProjectRelativePath(target.path, localPath)
-      if (activeProjectId && relativePath && shouldOpenLocalFileLinkInEditor(target.path)) {
+      if (shouldOpenLocalFileLinkInEditor(target.path)) {
         setLocalFilePreviewTarget(target)
       } else {
-        const action = shouldOpenLocalFileLinkInEditor(target.path) ? "open_editor" : "open_default"
-        void onOpenLocalLink(target, action)
+        void onOpenLocalLink(target, "open_default")
       }
       return
     }
@@ -778,7 +776,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
         view: window,
       }))
     })
-  }, [activeProjectId, localPath, onOpenLocalLink])
+  }, [onOpenLocalLink])
 
   // Stable identity: the viewport commits a render on every scroll event (the
   // visible row range changes constantly), and a fresh style object hands the
