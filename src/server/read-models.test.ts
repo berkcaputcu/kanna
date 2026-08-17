@@ -222,6 +222,7 @@ describe("read models", () => {
       planMode: true,
       autoPlan: false,
       sessionToken: "session-1",
+      lastTurnStartedAt: 123,
       lastTurnOutcome: null,
     })
     state.queuedMessagesByChatId.set("chat-1", [{
@@ -243,6 +244,7 @@ describe("read models", () => {
       () => ({ messages: [], startIndex: 0, readAnchor: null })
     )
     expect(chat?.runtime.provider).toBe("claude")
+    expect(chat?.runtime.lastTurnStartedAt).toBe(123)
     expect(chat?.queuedMessages.map((message) => message.content)).toEqual(["follow up"])
     expect(chat?.availableProviders.length).toBeGreaterThan(1)
     expect(chat?.availableProviders.find((provider) => provider.id === "codex")?.models.map((model) => model.id)).toEqual([

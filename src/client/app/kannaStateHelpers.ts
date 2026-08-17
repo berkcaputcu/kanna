@@ -27,7 +27,24 @@ export interface OptimisticUserPrompt {
 
 export interface OptimisticProcessingState {
   scopeId: string
+  startedAt: number
   ackedAt: number | null
+}
+
+/**
+ * Pick the current turn's start while the server catches up with a send.
+ *
+ * A runtime snapshot can still carry the previous turn's start timestamp when
+ * an optimistic send has just begun, so the newer local timestamp must win.
+ */
+export function getEffectiveTurnStartedAt(
+  runtimeStartedAt: number | undefined,
+  optimisticStartedAt: number | null,
+): number | null {
+  if (optimisticStartedAt != null) {
+    return Math.max(runtimeStartedAt ?? 0, optimisticStartedAt)
+  }
+  return runtimeStartedAt ?? null
 }
 
 function serializeAttachmentSignature(attachment: ChatAttachment) {

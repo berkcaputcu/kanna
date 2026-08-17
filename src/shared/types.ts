@@ -2003,6 +2003,8 @@ export interface ChatRuntime {
   localPath: string
   title: string
   status: KannaStatus
+  /** When the most recent turn started, if the chat has run a turn. */
+  lastTurnStartedAt?: number
   isDraining: boolean
   provider: AgentProvider | null
   planMode: boolean

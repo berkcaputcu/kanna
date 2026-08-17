@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import { CollapsedToolGroup } from "../components/messages/CollapsedToolGroup"
 import { OpenLocalLinkProvider } from "../components/messages/shared"
-import { formatPromptTimestamp } from "../components/messages/ResultMessage"
+import { formatElapsedDuration, formatPromptTimestamp } from "../components/messages/ResultMessage"
 import type { HydratedTranscriptMessage } from "../../shared/types"
 import {
   buildResolvedTranscriptRows,
@@ -64,6 +64,13 @@ function createToolMessage(id: string, toolId = id): HydratedTranscriptMessage {
 }
 
 describe("KannaTranscript", () => {
+  test("formats live durations as whole seconds with minute and hour parts", () => {
+    expect(formatElapsedDuration(0)).toBe("0s")
+    expect(formatElapsedDuration(12_999)).toBe("12s")
+    expect(formatElapsedDuration(61_000)).toBe("1m 1s")
+    expect(formatElapsedDuration(3_661_000)).toBe("1h 1m 1s")
+  })
+
   test("renders user attachment cards outside the user bubble", () => {
     const html = renderTranscript([
       {

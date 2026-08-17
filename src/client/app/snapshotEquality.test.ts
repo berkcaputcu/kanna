@@ -133,4 +133,14 @@ describe("foldChatSnapshot", () => {
     // Identity: this is what keeps an unchanged push from re-rendering.
     expect(foldChatSnapshot(current, null, snapshot(0, ["a", "b"]))).toBe(current)
   })
+
+  test("does not reuse a snapshot when the turn start changes", () => {
+    const current = snapshot(0, ["a"])
+    const next = {
+      ...current,
+      runtime: { ...current.runtime, lastTurnStartedAt: 1234 },
+    }
+
+    expect(foldChatSnapshot(current, null, next)).toBe(next)
+  })
 })

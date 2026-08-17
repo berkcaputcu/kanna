@@ -20,6 +20,7 @@ function sameRuntime(left: ChatSnapshot["runtime"] | null | undefined, right: Ch
     && left.localPath === right.localPath
     && left.title === right.title
     && left.status === right.status
+    && left.lastTurnStartedAt === right.lastTurnStartedAt
     && left.isDraining === right.isDraining
     && left.provider === right.provider
     && left.planMode === right.planMode

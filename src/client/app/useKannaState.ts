@@ -25,6 +25,7 @@ import { processTranscriptMessages } from "../lib/parseTranscript"
 import { canCancelStatus, getLatestToolIds, isProcessingStatus } from "./derived"
 import {
   getActiveChatSnapshot,
+  getEffectiveTurnStartedAt,
   getMostRecentlyActiveProjectId,
   getNewestRemainingChatId,
   getPreviousPrompt,
@@ -67,6 +68,7 @@ export {
   applySidebarProjectOrder,
   countMatchingUserPrompts,
   getActiveChatSnapshot,
+  getEffectiveTurnStartedAt,
   getMostRecentlyActiveProjectId,
   getNewestRemainingChatId,
   getNextMeasuredInputHeight,
@@ -179,6 +181,7 @@ export interface KannaState {
   previousPrompt: string | null
   latestToolIds: ReturnType<typeof getLatestToolIds>
   runtime: ChatSnapshot["runtime"] | null
+  turnStartedAt: number | null
   runtimeStatus: string | null
   availableProviders: ProviderCatalogEntry[]
   isProcessing: boolean
@@ -520,6 +523,10 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const latestToolIds = useMemo(() => getLatestToolIds(messages), [messages])
   const runtime = activeChatSnapshot?.runtime ?? null
   const queuedMessages = activeChatSnapshot?.queuedMessages ?? []
+  const optimisticTurnStartedAt = optimisticProcessing?.scopeId === optimisticScopeId
+    ? optimisticProcessing.startedAt
+    : null
+  const turnStartedAt = getEffectiveTurnStartedAt(runtime?.lastTurnStartedAt, optimisticTurnStartedAt)
   const optimisticRuntimeStatus = optimisticProcessing?.scopeId === optimisticScopeId && (!runtime || runtime.status === "idle")
     ? "starting"
     : null
@@ -564,10 +571,10 @@ export function useKannaState(activeChatId: string | null): KannaState {
     if (optimisticProcessing?.scopeId !== optimisticScopeId) {
       return
     }
-    if (runtime?.status && runtime.status !== "idle") {
+    if (runtime?.status && runtime.status !== "idle" && runtime.lastTurnStartedAt != null) {
       setOptimisticProcessing(null)
     }
-  }, [optimisticProcessing, optimisticScopeId, runtime?.status])
+  }, [optimisticProcessing, optimisticScopeId, runtime?.lastTurnStartedAt, runtime?.status])
 
   useEffect(() => {
     if (!optimisticProcessing?.ackedAt || optimisticProcessing.scopeId !== optimisticScopeId) {
@@ -902,6 +909,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     previousPrompt,
     latestToolIds,
     runtime,
+    turnStartedAt,
     runtimeStatus: effectiveRuntimeStatus,
     availableProviders,
     isProcessing,

@@ -386,6 +386,7 @@ export function deriveChatSnapshot(
     localPath: project.localPath,
     title: chat.title,
     status: deriveStatus(chat, activeStatuses.get(chat.id)),
+    ...(chat.lastTurnStartedAt != null ? { lastTurnStartedAt: chat.lastTurnStartedAt } : {}),
     isDraining: drainingChatIds.has(chat.id),
     provider: chat.provider,
     planMode: chat.planMode,

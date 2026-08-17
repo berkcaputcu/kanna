@@ -190,6 +190,7 @@ interface ChatTranscriptViewportProps {
   localPath: string | null | undefined
   latestToolIds: KannaState["latestToolIds"]
   isProcessing: boolean
+  turnStartedAt: number | null
   runtimeStatus: string | null
   isDraining: boolean
   commandError: string | null
@@ -313,6 +314,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   localPath,
   latestToolIds,
   isProcessing,
+  turnStartedAt,
   runtimeStatus,
   isDraining,
   commandError,
@@ -798,7 +800,12 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   // would sit 8px left of every tool icon above it.
   const listFooter = (
     <div className="mx-auto w-full max-w-[816px] px-2">
-      {isProcessing ? <ProcessingMessage status={runtimeStatus ?? undefined} /> : null}
+      {isProcessing ? (
+        <ProcessingMessage
+          status={runtimeStatus ?? undefined}
+          startedAt={turnStartedAt}
+        />
+      ) : null}
       {queuedMessages.map((message) => (
         <QueuedUserMessage
           key={message.id}

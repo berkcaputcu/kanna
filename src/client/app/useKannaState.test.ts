@@ -3,6 +3,7 @@ import {
   applySidebarProjectOrder,
   countMatchingUserPrompts,
   getActiveChatSnapshot,
+  getEffectiveTurnStartedAt,
   getMostRecentlyActiveProjectId,
   getNextMeasuredInputHeight,
   getNewestRemainingChatId,
@@ -358,6 +359,21 @@ describe("getActiveChatSnapshot", () => {
     }
 
     expect(getActiveChatSnapshot(snapshot, "chat-new")).toBeNull()
+  })
+})
+
+describe("getEffectiveTurnStartedAt", () => {
+  test("prefers a newer optimistic send over a stale runtime timestamp", () => {
+    expect(getEffectiveTurnStartedAt(100, 200)).toBe(200)
+  })
+
+  test("uses the server timestamp once it is newer", () => {
+    expect(getEffectiveTurnStartedAt(300, 200)).toBe(300)
+  })
+
+  test("falls back to the runtime timestamp without an optimistic send", () => {
+    expect(getEffectiveTurnStartedAt(300, null)).toBe(300)
+    expect(getEffectiveTurnStartedAt(undefined, null)).toBeNull()
   })
 })
 

@@ -97,6 +97,7 @@ export function useSendMessage(params: {
     if (activeChatId) markSending(activeChatId, sentAt)
     setOptimisticProcessing({
       scopeId: optimisticScopeId,
+      startedAt: sentAt,
       ackedAt: null,
     })
     const requiredMatchCount = countMatchingUserPrompts(serverTranscriptEntries, signature)
@@ -149,6 +150,7 @@ export function useSendMessage(params: {
         const nextScopeId = !activeChatId && result.chatId ? result.chatId : current.scopeId
         return {
           scopeId: nextScopeId,
+          startedAt: current.startedAt,
           ackedAt: performance.now(),
         }
       })
