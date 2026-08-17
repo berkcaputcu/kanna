@@ -92,11 +92,9 @@ export function OpenAppIcon({ value, isMac, className }: { value: OpenAppValue; 
   return <EditorIcon preset={value.replace("editor:", "") as EditorPreset} className={className} />
 }
 
-function normalizeOpenAppValue(value: string | null, fallback: OpenAppValue): OpenAppValue {
+export function normalizeOpenAppValue(value: string | null, fallback: OpenAppValue, repoUrl?: string): OpenAppValue {
   if (value === "finder" || value === "terminal" || value === "preview" || value === "default") return value
-  // Not `repo`: the last-used destination is remembered across projects, and a
-  // project with no origin would offer a button that does nothing.
-  if (value === "repo") return fallback
+  if (value === "repo") return repoUrl ? "repo" : fallback
   if (value?.startsWith("editor:")) {
     const preset = value.slice("editor:".length)
     if (preset === "vscode" || EDITOR_OPTIONS.some((option) => option.value === preset)) {
@@ -216,12 +214,12 @@ export function OpenExternalSelect({
   repoUrl?: string
   onOpenExternal: (action: OpenExternalAction, editor?: EditorOpenSettings) => void
 }) {
-  const fallbackValue = `editor:${editorPreset}` as OpenAppValue
+  const fallbackValue = (repoUrl ? "repo" : `editor:${editorPreset}`) as OpenAppValue
   const [lastValue, setLastValue] = useState<OpenAppValue>(fallbackValue)
 
   useEffect(() => {
-    setLastValue(normalizeOpenAppValue(window.localStorage.getItem(OPEN_SELECT_STORAGE_KEY), fallbackValue))
-  }, [fallbackValue])
+    setLastValue(normalizeOpenAppValue(window.localStorage.getItem(OPEN_SELECT_STORAGE_KEY), fallbackValue, repoUrl))
+  }, [fallbackValue, repoUrl])
 
   const items = useMemo(() => getOpenAppItems({
     editorPreset,
@@ -233,13 +231,8 @@ export function OpenExternalSelect({
   }), [editorPreset, isMac, repoUrl])
 
   function handleOpenValue(value: OpenAppValue) {
-    // The forge isn't remembered as the split button's default — see
-    // `normalizeOpenAppValue`. Switching projects would leave the button
-    // pointing at a repo the current project doesn't have.
-    if (value !== "repo") {
-      setLastValue(value)
-      window.localStorage.setItem(OPEN_SELECT_STORAGE_KEY, value)
-    }
+    setLastValue(value)
+    window.localStorage.setItem(OPEN_SELECT_STORAGE_KEY, value)
     openAppValue({ value, editorCommandTemplate, repoUrl, onOpenExternal })
   }
 
@@ -251,7 +244,7 @@ export function OpenExternalSelect({
             variant="ghost"
             size="none"
             onClick={() => handleOpenValue(lastValue)}
-            title={`Open in ${getOpenAppLabel(lastValue, isMac)}`}
+            title={`Open in ${getOpenAppLabel(lastValue, isMac, repoUrl)}`}
             className="border-0 p-1 py-[3px] pr-0 hover:!border-border/0 hover:!bg-transparent"
           >
             <OpenAppIcon value={lastValue} isMac={isMac} className="size-5.5" />
@@ -262,7 +255,7 @@ export function OpenExternalSelect({
           shortcut={lastValue === "finder" ? finderShortcut : lastValue === `editor:${editorPreset}` ? editorShortcut : undefined}
         />
       </HotkeyTooltip>
-      <Select value={undefined} onValueChange={(value) => handleOpenValue(value as OpenAppValue)}>
+      <Select value={lastValue} onValueChange={(value) => handleOpenValue(value as OpenAppValue)}>
         <SelectTrigger
           aria-label="Choose open destination"
           className="!h-auto !py-0 !pl-0.5 !pr-1 border-0 bg-transparent hover:bg-transparent focus:ring-0 focus:ring-offset-0 [&>svg]:hidden"

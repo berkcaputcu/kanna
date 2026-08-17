@@ -1,5 +1,17 @@
 import { describe, expect, test } from "bun:test"
-import { getOpenAppItems } from "./open-external-menu"
+import { getOpenAppItems, normalizeOpenAppValue } from "./open-external-menu"
+
+describe("normalizeOpenAppValue", () => {
+  test("uses GitHub as the fallback when the project has a repository URL", () => {
+    expect(normalizeOpenAppValue(null, "repo", "https://github.com/acme/widgets")).toBe("repo")
+    expect(normalizeOpenAppValue(null, "editor:cursor")).toBe("editor:cursor")
+  })
+
+  test("restores GitHub only when the current project has a repository URL", () => {
+    expect(normalizeOpenAppValue("repo", "editor:cursor", "https://github.com/acme/widgets")).toBe("repo")
+    expect(normalizeOpenAppValue("repo", "editor:cursor")).toBe("editor:cursor")
+  })
+})
 
 describe("getOpenAppItems", () => {
   test("keeps the default editor first and custom hidden unless it is default", () => {
