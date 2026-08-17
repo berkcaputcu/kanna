@@ -144,6 +144,7 @@ describe("parseArgs", () => {
         openBrowser: false,
         share: false,
         password: null,
+        trustProxy: false,
         strictPort: false,
         noCloud: false,
         directCloud: false,
@@ -160,6 +161,7 @@ describe("parseArgs", () => {
         openBrowser: true,
         share: false,
         password: null,
+        trustProxy: false,
         strictPort: true,
         noCloud: false,
         directCloud: false,
@@ -176,6 +178,7 @@ describe("parseArgs", () => {
         openBrowser: true,
         share: false,
         password: null,
+        trustProxy: false,
         strictPort: false,
         noCloud: false,
         directCloud: false,
@@ -192,6 +195,7 @@ describe("parseArgs", () => {
         openBrowser: true,
         share: "quick",
         password: null,
+        trustProxy: false,
         strictPort: false,
         noCloud: false,
         directCloud: false,
@@ -208,6 +212,7 @@ describe("parseArgs", () => {
         openBrowser: true,
         share: { kind: "token", token: "secret-token" },
         password: null,
+        trustProxy: false,
         strictPort: false,
         noCloud: false,
         directCloud: false,
@@ -224,6 +229,7 @@ describe("parseArgs", () => {
         openBrowser: true,
         share: false,
         password: "secret",
+        trustProxy: false,
         strictPort: false,
         noCloud: false,
         directCloud: false,
@@ -234,6 +240,23 @@ describe("parseArgs", () => {
   test("--password without a value throws", () => {
     expect(() => parseArgs(["--password"])).toThrow("Missing value for --password")
     expect(() => parseArgs(["--password", "--no-open"])).toThrow("Missing value for --password")
+  })
+
+  test("--trust-proxy enables reverse-proxy origin handling", () => {
+    expect(parseArgs(["--trust-proxy"])).toEqual({
+      kind: "run",
+      options: {
+        port: 3210,
+        host: "127.0.0.1",
+        openBrowser: true,
+        share: false,
+        password: null,
+        trustProxy: true,
+        strictPort: false,
+        noCloud: false,
+        directCloud: false,
+      },
+    })
   })
 
   test("--cloudflared without a token throws", () => {
@@ -250,6 +273,7 @@ describe("parseArgs", () => {
         openBrowser: true,
         share: false,
         password: null,
+        trustProxy: false,
         strictPort: false,
         noCloud: false,
         directCloud: false,
@@ -266,6 +290,7 @@ describe("parseArgs", () => {
         openBrowser: true,
         share: false,
         password: null,
+        trustProxy: false,
         strictPort: false,
         noCloud: false,
         directCloud: false,
@@ -355,6 +380,16 @@ describe("runCli", () => {
     })
     expect(calls.openUrl).toEqual([])
     expect(calls.log).toContain("[kanna] data dir: ~/.kanna/data")
+  })
+
+  test("passes explicit proxy trust to the server", async () => {
+    const { calls, deps } = createDeps()
+
+    const result = await runCli(["--trust-proxy", "--no-open"], deps)
+
+    expect(result.kind).toBe("started")
+    expect(calls.startServer[0]?.trustProxy).toBe(true)
+    if (result.kind === "started") await result.stop()
   })
 
   test("logs the dev data dir when the dev runtime profile is active", async () => {
@@ -858,4 +893,3 @@ describe("runCli single-instance guard + hosted open", () => {
     if (result.kind === "started") await result.stop()
   })
 })
-

@@ -117,6 +117,7 @@ kanna                  # start with defaults (localhost only)
 kanna --port 4000      # custom port
 kanna --no-open        # don't open browser
 kanna --password <secret>      # require a password before loading the app
+kanna --trust-proxy             # trust HTTPS headers from a trusted reverse proxy
 kanna --share                # create a public quick tunnel + terminal QR
 kanna --cloudflared <token>  # run a named Cloudflare tunnel from a token
 ```
@@ -147,6 +148,14 @@ bun run dev --password my-secret
 
 Kanna verifies the password once, then sets a browser-session cookie. The password itself is not stored in the browser.
 When password protection is enabled, the backend requires authentication for API routes and `/ws`. The SPA shell still loads, `/health` remains public for restart detection, and the same in-app password screen is used in both dev and production.
+
+If Kanna is behind a trusted HTTPS reverse proxy such as Traefik, enable proxy trust so password login and WebSocket origin checks use the public HTTPS origin:
+
+```bash
+kanna --remote --password my-secret --trust-proxy --no-open
+```
+
+Only use `--trust-proxy` when Kanna is reachable through that trusted proxy. It trusts the proxy's `X-Forwarded-Proto` header.
 
 ### Public share link
 

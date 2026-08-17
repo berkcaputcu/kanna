@@ -20,6 +20,8 @@ export interface CliOptions {
   openBrowser: boolean
   share: ShareMode
   password: string | null
+  /** Trust X-Forwarded-Proto from a trusted reverse proxy such as Traefik. */
+  trustProxy: boolean
   strictPort: boolean
   /** One-shot: skip bringing a paired machine online for this run. */
   noCloud: boolean
@@ -118,6 +120,7 @@ Options:
   --cloudflared <token>
                        Run a named Cloudflare tunnel from a token
   --password <secret>  Require a password before loading the app
+  --trust-proxy         Trust HTTPS headers from a reverse proxy
   --strict-port        Fail instead of trying another port
   --no-open            Don't open browser automatically
   --no-cloud           Skip bringing a paired machine online for this run
@@ -162,6 +165,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let openBrowser = true
   let share: ShareMode = false
   let password: string | null = null
+  let trustProxy = false
   let sawHost = false
   let sawRemote = false
   let strictPort = false
@@ -234,6 +238,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
       index += 1
       continue
     }
+    if (arg === "--trust-proxy") {
+      trustProxy = true
+      continue
+    }
     if (arg === "--strict-port") {
       strictPort = true
       continue
@@ -257,6 +265,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       openBrowser,
       share,
       password,
+      trustProxy,
       strictPort,
       noCloud,
       directCloud,
@@ -413,7 +422,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
 
   const started = await deps.startServer({
     ...runOptions,
-    trustProxy: isShareEnabled(runOptions.share) || cloudRuntime !== null,
+    trustProxy: runOptions.trustProxy || isShareEnabled(runOptions.share) || cloudRuntime !== null,
     cloud: cloudRuntime,
     onMigrationProgress: deps.log,
     update: {
