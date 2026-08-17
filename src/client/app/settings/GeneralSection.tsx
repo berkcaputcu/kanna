@@ -198,11 +198,21 @@ export function GeneralSection({
     void playChatNotificationSound(nextValue, 1).catch(() => undefined)
   }
 
+  async function handleUsageLimitIndicatorsChange(nextValue: "enabled" | "disabled") {
+    try {
+      setAppSettingsError(null)
+      await handleWriteAppSettings({ usageLimitIndicatorsEnabled: nextValue === "enabled" })
+    } catch (error) {
+      setAppSettingsError(error instanceof Error ? error.message : "Unable to save usage indicator settings.")
+    }
+  }
+
   const customEditorPreview = editorCommandDraft
     .replaceAll("{path}", "/Users/jake/Projects/kanna/src/client/app/App.tsx")
     .replaceAll("{line}", "12")
     .replaceAll("{column}", "1")
   const gitAttributionSettingValue = appSettings?.gitAttributionEnabled === true ? "enabled" : "disabled"
+  const usageLimitIndicatorsValue = appSettings?.usageLimitIndicatorsEnabled === false ? "disabled" : "enabled"
 
   return (
     <>
@@ -390,6 +400,20 @@ export function GeneralSection({
               {minColumnWidth === DEFAULT_TERMINAL_MIN_COLUMN_WIDTH ? " (default)" : ""}
             </div>
           </div>
+        </SettingsRow>
+
+        <SettingsRow
+          def={SETTINGS_ROWS.usageLimitIndicators}
+          description="Show plan-limit rings next to the chat input's context meter. Claude Code shows its 5-hour and weekly windows; Codex shows its weekly window. Full details stay on the Usage page."
+        >
+          <SegmentedControl
+            value={usageLimitIndicatorsValue}
+            onValueChange={(value) => {
+              void handleUsageLimitIndicatorsChange(value)
+            }}
+            options={ENABLED_DISABLED_OPTIONS}
+            size="sm"
+          />
         </SettingsRow>
 
         <SettingsRow def={SETTINGS_ROWS.gitAttribution}>
