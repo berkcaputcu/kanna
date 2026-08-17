@@ -12,6 +12,7 @@ import { ArrowDown, Flower, Upload } from "lucide-react"
 import { DrainingIndicator } from "../../components/messages/DrainingIndicator"
 import { QueuedUserMessage } from "../../components/messages/QueuedUserMessage"
 import { OpenLocalLinkProvider, type OpenLocalLinkTarget } from "../../components/messages/shared"
+import { LocalFilePreviewModal } from "../../components/messages/LocalFilePreviewModal"
 import { ProcessingMessage } from "../../components/messages/ProcessingMessage"
 import { ContextMenu, ContextMenuTrigger } from "../../components/ui/context-menu"
 import { OpenExternalContextMenuContent, openContextMenuFromButton } from "../../components/open-external-menu"
@@ -19,7 +20,7 @@ import { TRANSCRIPT_PADDING_BOTTOM_OFFSET } from "../kannaStateHelpers"
 import { useScrollbarGutterVar } from "../../hooks/useScrollbarGutterVar"
 import { cn } from "../../lib/utils"
 import type { ChatJumpRole } from "../../lib/chat-navigation"
-import { formatPathWithTilde, shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
+import { formatPathWithTilde, getProjectRelativePath, shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
 import {
   buildResolvedTranscriptRows,
   KannaTranscriptRow,
@@ -181,6 +182,7 @@ export interface TranscriptScrollHandle {
 
 interface ChatTranscriptViewportProps {
   activeChatId: string | null
+  activeProjectId: string | null
   listRef: React.RefObject<TranscriptScrollHandle | null>
   messages: KannaState["messages"]
   queuedMessages: KannaState["queuedMessages"]
@@ -303,6 +305,7 @@ const TranscriptMinimapOverlay = memo(function TranscriptMinimapOverlay({
 
 const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   activeChatId,
+  activeProjectId,
   listRef,
   messages,
   queuedMessages,
@@ -350,6 +353,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   const localLinkMenuTriggerRef = useRef<HTMLSpanElement | null>(null)
   const [toolGroupExpanded, setToolGroupExpanded] = useState<Record<string, boolean>>({})
   const [localLinkMenuTarget, setLocalLinkMenuTarget] = useState<OpenLocalLinkTarget | null>(null)
+  const [localFilePreviewTarget, setLocalFilePreviewTarget] = useState<OpenLocalLinkTarget | null>(null)
   const isMac = platform === "darwin"
 
   const rawRows = useMemo(() => buildResolvedTranscriptRows(messages, {
@@ -748,8 +752,13 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
 
   const handleOpenLocalLinkClick = useCallback((target: OpenLocalLinkTarget) => {
     if (target.trigger !== "contextmenu") {
-      const action = shouldOpenLocalFileLinkInEditor(target.path) ? "open_editor" : "open_default"
-      void onOpenLocalLink(target, action)
+      const relativePath = getProjectRelativePath(target.path, localPath)
+      if (activeProjectId && relativePath && shouldOpenLocalFileLinkInEditor(target.path)) {
+        setLocalFilePreviewTarget(target)
+      } else {
+        const action = shouldOpenLocalFileLinkInEditor(target.path) ? "open_editor" : "open_default"
+        void onOpenLocalLink(target, action)
+      }
       return
     }
 
@@ -767,7 +776,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
         view: window,
       }))
     })
-  }, [onOpenLocalLink])
+  }, [activeProjectId, localPath, onOpenLocalLink])
 
   // Stable identity: the viewport commits a render on every scroll event (the
   // visible row range changes constantly), and a fresh style object hands the
@@ -907,6 +916,15 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
           />
         ) : null}
       </ContextMenu>
+
+      <LocalFilePreviewModal
+        projectId={activeProjectId}
+        projectPath={localPath}
+        target={localFilePreviewTarget}
+        onOpenChange={(open) => {
+          if (!open) setLocalFilePreviewTarget(null)
+        }}
+      />
 
       {showEmptyState ? (
         <div

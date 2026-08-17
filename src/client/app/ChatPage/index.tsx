@@ -997,6 +997,7 @@ export function ChatPage() {
         <ToolPayloadProvider store={toolPayloadStore}>
         <ChatTranscriptViewport
           activeChatId={state.activeChatId}
+          activeProjectId={state.activeProjectId}
           listRef={transcriptListRef}
           messages={state.messages}
           queuedMessages={state.queuedMessages}

@@ -112,6 +112,29 @@ export function shouldOpenLocalFileLinkInEditor(filePath: string) {
   return EDITOR_OPEN_EXTENSIONS.has(extension)
 }
 
+/**
+ * Return a safe project-relative path for the read-only project-file endpoint.
+ * Local links are absolute paths, while the server endpoint intentionally only
+ * accepts paths rooted inside the selected project.
+ */
+export function getProjectRelativePath(filePath: string, projectPath: string | null | undefined) {
+  if (!projectPath) return null
+
+  const normalizedFilePath = filePath.replaceAll("\\", "/")
+  const normalizedProjectPath = projectPath.replaceAll("\\", "/").replace(/\/+$/, "")
+  if (!normalizedProjectPath || normalizedFilePath === normalizedProjectPath) return null
+
+  const projectPrefix = `${normalizedProjectPath}/`
+  if (!normalizedFilePath.startsWith(projectPrefix)) return null
+
+  const relativePath = normalizedFilePath.slice(projectPrefix.length)
+  if (!relativePath || relativePath.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
+    return null
+  }
+
+  return relativePath
+}
+
 
 /**
  * Strip workspace prefix for display.

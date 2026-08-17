@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { formatPathWithTilde, parseLocalFileLink, shouldOpenLocalFileLinkInEditor } from "./pathUtils"
+import { formatPathWithTilde, getProjectRelativePath, parseLocalFileLink, shouldOpenLocalFileLinkInEditor } from "./pathUtils"
 
 describe("formatPathWithTilde", () => {
   test("contracts a home subpath to ~", () => {
@@ -91,5 +91,18 @@ describe("shouldOpenLocalFileLinkInEditor", () => {
     expect(shouldOpenLocalFileLinkInEditor("/Users/jake/Projects/kanna/movie.mp4")).toBe(false)
     expect(shouldOpenLocalFileLinkInEditor("/Users/jake/Projects/kanna/report.docx")).toBe(false)
     expect(shouldOpenLocalFileLinkInEditor("/Users/jake/Projects/kanna/archive.zip")).toBe(false)
+  })
+})
+
+describe("getProjectRelativePath", () => {
+  test("returns a path inside the active project", () => {
+    expect(getProjectRelativePath("/home/jake/kanna/src/app.ts", "/home/jake/kanna")).toBe("src/app.ts")
+    expect(getProjectRelativePath("C:\\work\\kanna\\src\\app.ts", "C:\\work\\kanna")).toBe("src/app.ts")
+  })
+
+  test("rejects paths outside or at the project root", () => {
+    expect(getProjectRelativePath("/home/jake/other/app.ts", "/home/jake/kanna")).toBeNull()
+    expect(getProjectRelativePath("/home/jake/kanna", "/home/jake/kanna")).toBeNull()
+    expect(getProjectRelativePath("/home/jake/kanna/src/../app.ts", "/home/jake/kanna")).toBeNull()
   })
 })
