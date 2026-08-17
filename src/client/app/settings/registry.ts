@@ -86,6 +86,12 @@ export const SETTINGS_ROWS = defineRows({
     description: "Current version and update status.",
     keywords: ["version", "upgrade", "latest"],
   },
+  appName: {
+    sectionId: "general",
+    title: "Application Name",
+    description: "Name shown beside the logo and used in the browser title.",
+    keywords: ["branding", "brand", "title", "logo"],
+  },
   theme: {
     sectionId: "general",
     title: "Theme",

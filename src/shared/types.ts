@@ -1036,6 +1036,8 @@ export interface GitHubRecentReposResult {
 }
 
 export interface AppSettingsSnapshot {
+  /** Display name shown beside the logo and used as the browser title prefix. */
+  appName: string
   /** Add Kanna attribution to agent instructions, pull requests, and Git sidebar commits. */
   gitAttributionEnabled: boolean
   browserSettingsMigrated: boolean
@@ -1078,6 +1080,7 @@ export interface AppSettingsSnapshot {
 }
 
 export interface AppSettingsPatch {
+  appName?: string
   gitAttributionEnabled?: boolean
   browserSettingsMigrated?: boolean
   theme?: AppThemePreference

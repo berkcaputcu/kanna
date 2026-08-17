@@ -74,6 +74,7 @@ const DEFAULT_KEYBINDINGS_SNAPSHOT: KeybindingsSnapshot = {
 }
 
 const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
+  appName: "Kanna",
   devbox: false,
   gitAttributionEnabled: false,
   browserSettingsMigrated: false,

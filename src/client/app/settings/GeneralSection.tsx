@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { Monitor, Moon, Sun } from "lucide-react"
+import { APP_NAME } from "../../../shared/branding"
 import type { EditorPreset } from "../../../shared/protocol"
 import { DEFAULT_NEW_PROJECTS_DIRECTORY } from "../../../shared/types"
 import { EDITOR_OPTIONS, EditorIcon } from "../../components/editor-icons"
@@ -76,6 +77,8 @@ export function GeneralSection({
   const [scrollbackDraft, setScrollbackDraft] = useState(String(scrollbackLines))
   const [minColumnWidthDraft, setMinColumnWidthDraft] = useState(String(minColumnWidth))
   const [editorCommandDraft, setEditorCommandDraft] = useState(editorCommandTemplate)
+  const appName = appSettings?.appName ?? APP_NAME
+  const [appNameDraft, setAppNameDraft] = useState(appName)
   const newProjectsDirectory = appSettings?.newProjectsDirectory ?? DEFAULT_NEW_PROJECTS_DIRECTORY
   const [newProjectsDirectoryDraft, setNewProjectsDirectoryDraft] = useState(newProjectsDirectory)
   const [appSettingsError, setAppSettingsError] = useState<string | null>(null)
@@ -105,6 +108,10 @@ export function GeneralSection({
   useEffect(() => {
     setEditorCommandDraft(editorCommandTemplate)
   }, [editorCommandTemplate])
+
+  useEffect(() => {
+    setAppNameDraft(appName)
+  }, [appName])
 
   useEffect(() => {
     setNewProjectsDirectoryDraft(newProjectsDirectory)
@@ -138,6 +145,17 @@ export function GeneralSection({
     setEditorCommandTemplate(editorCommandDraft)
     void handleWriteAppSettings({ editor: { commandTemplate: editorCommandDraft } }).catch((error) => {
       setAppSettingsError(error instanceof Error ? error.message : "Unable to save editor settings.")
+    })
+  }
+
+  function commitAppName() {
+    const trimmed = appNameDraft.trim()
+    if (trimmed === appName) {
+      setAppNameDraft(appName)
+      return
+    }
+    void handleWriteAppSettings({ appName: trimmed || APP_NAME }).catch((error) => {
+      setAppSettingsError(error instanceof Error ? error.message : "Unable to save application name settings.")
     })
   }
 
@@ -244,6 +262,19 @@ export function GeneralSection({
               Latest: {updateSnapshot?.latestVersion ?? "Unknown"}
             </div>
           </div>
+        </SettingsRow>
+
+        <SettingsRow def={SETTINGS_ROWS.appName}>
+          <Input
+            type="text"
+            value={appNameDraft}
+            onChange={(event) => setAppNameDraft(event.target.value)}
+            onBlur={commitAppName}
+            onKeyDown={(event) => handleSettingsInputKeyDown(event, commitAppName)}
+            maxLength={80}
+            autoComplete="off"
+            className="w-full md:w-64"
+          />
         </SettingsRow>
 
         <SettingsRow def={SETTINGS_ROWS.theme}>

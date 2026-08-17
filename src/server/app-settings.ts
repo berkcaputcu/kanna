@@ -2,7 +2,7 @@ import { watch, type FSWatcher } from "node:fs"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
-import { getSettingsFilePath, LOG_PREFIX } from "../shared/branding"
+import { APP_NAME, getSettingsFilePath, LOG_PREFIX } from "../shared/branding"
 import { formatDisplayPath } from "./paths"
 import {
   mergeProviderDefaultsPatch,
@@ -21,6 +21,7 @@ import {
 } from "../shared/types"
 
 interface AppSettingsFile {
+  appName?: unknown
   gitAttributionEnabled?: unknown
   browserSettingsMigrated?: unknown
   theme?: unknown
@@ -132,8 +133,14 @@ function normalizeEditorCommandTemplate(value: unknown, preset: EditorPreset) {
   return trimmed || getDefaultEditorCommandTemplate(preset)
 }
 
+function normalizeAppName(value: unknown) {
+  const trimmed = typeof value === "string" ? value.trim() : ""
+  return trimmed || APP_NAME
+}
+
 function toFilePayload(state: AppSettingsState) {
   return {
+    appName: state.appName,
     gitAttributionEnabled: state.gitAttributionEnabled,
     browserSettingsMigrated: state.browserSettingsMigrated,
     theme: state.theme,
@@ -155,6 +162,7 @@ function toFilePayload(state: AppSettingsState) {
 function toSnapshot(state: AppSettingsState, devbox = false): AppSettingsSnapshot {
   return {
     devbox,
+    appName: state.appName,
     gitAttributionEnabled: state.gitAttributionEnabled,
     browserSettingsMigrated: state.browserSettingsMigrated,
     theme: state.theme,
@@ -216,8 +224,14 @@ function normalizeAppSettings(
     warnings.push("newProjectsDirectory must be a non-empty string")
   }
 
+  const appName = normalizeAppName(source?.appName)
+  if (source?.appName !== undefined && (typeof source.appName !== "string" || !source.appName.trim())) {
+    warnings.push("appName must be a non-empty string")
+  }
+
   const editorPreset = normalizeEditorPreset(source?.editor?.preset)
   const state: AppSettingsState = {
+    appName,
     gitAttributionEnabled,
     browserSettingsMigrated: source?.browserSettingsMigrated === true,
     theme: normalizeTheme(source?.theme),
@@ -260,6 +274,7 @@ function normalizeAppSettings(
 
 function toComparablePayload(source: AppSettingsFile) {
   return {
+    appName: source.appName,
     gitAttributionEnabled: source.gitAttributionEnabled,
     browserSettingsMigrated: source.browserSettingsMigrated,
     theme: source.theme,

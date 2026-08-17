@@ -21,6 +21,7 @@ async function createTempFilePath() {
 function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettingsSnapshot> = {}): AppSettingsSnapshot {
   return {
     devbox: false,
+    appName: "Kanna",
     gitAttributionEnabled: false,
     browserSettingsMigrated: false,
     setupShown: false,
@@ -164,6 +165,22 @@ describe("readAppSettingsSnapshot", () => {
       manager.dispose()
     }
   })
+
+  test("appName defaults to Kanna, trims custom values, and warns on invalid values", async () => {
+    const filePath = await createTempFilePath()
+
+    expect((await readAppSettingsSnapshot(filePath)).appName).toBe("Kanna")
+
+    await writeFile(filePath, JSON.stringify({ appName: "  My Kanna  " }), "utf8")
+    const custom = await readAppSettingsSnapshot(filePath)
+    expect(custom.appName).toBe("My Kanna")
+    expect(custom.warning).toBeNull()
+
+    await writeFile(filePath, JSON.stringify({ appName: "  " }), "utf8")
+    const empty = await readAppSettingsSnapshot(filePath)
+    expect(empty.appName).toBe("Kanna")
+    expect(empty.warning).toContain("appName")
+  })
 })
 
 describe("AppSettingsManager", () => {
@@ -231,6 +248,18 @@ describe("AppSettingsManager", () => {
     expect(snapshot.providerDefaults.codex.modelOptions.accessMode).toBe("approval")
     expect(nextPayload.theme).toBe("dark")
     expect(nextPayload.chatSoundId).toBe("glass")
+
+    manager.dispose()
+  })
+
+  test("persists a custom app name", async () => {
+    const filePath = await createTempFilePath()
+    const manager = new AppSettingsManager(filePath)
+    await manager.initialize()
+
+    const snapshot = await manager.writePatch({ appName: "My Kanna" })
+    expect(snapshot.appName).toBe("My Kanna")
+    expect(JSON.parse(await readFile(filePath, "utf8"))).toMatchObject({ appName: "My Kanna" })
 
     manager.dispose()
   })

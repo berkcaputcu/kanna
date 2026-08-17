@@ -442,6 +442,7 @@ function KannaSidebarImpl({
 
   const hasVisibleChats = activeVisibleCount > 0
   const isLocalProjectsActive = location.pathname === "/"
+  const appName = useAppSettingsStore((s) => s.settings?.appName ?? APP_NAME)
   const newSidebarEnabled = useAppSettingsStore((s) => s.settings?.newSidebarEnabled !== false)
   const devbox = useAppSettingsStore((s) => s.settings?.devbox === true)
   const newSidebarProjectsView = newSidebarEnabled && sidebarView === "projects"
@@ -561,7 +562,7 @@ function KannaSidebarImpl({
               <PanelLeft className="absolute inset-0 h-4 w-4 sm:h-6 sm:w-6 text-slate-500 dark:text-slate-400 transition-all duration-200 ease-out opacity-0 scale-0 group-hover/sidebar-collapse:opacity-100 group-hover/sidebar-collapse:scale-80 hover:opacity-50" />
             </button>
             <Flower className="h-5 w-5 sm:h-6 sm:w-6 text-logo md:hidden" />
-            <span className="font-logo text-base uppercase sm:text-md text-slate-600 dark:text-slate-100">{APP_NAME}</span>
+            <span className="font-logo text-base uppercase sm:text-md text-slate-600 dark:text-slate-100">{appName}</span>
           </div>
           <div className="flex items-center justify-self-end md:justify-self-auto">
             {!newSidebarEnabled ? (

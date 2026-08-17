@@ -247,11 +247,12 @@ function KannaLayout() {
   const chatSoundPreference = useChatSoundPreferencesStore((store) => store.chatSoundPreference)
   const chatSoundId = useChatSoundPreferencesStore((store) => store.chatSoundId)
   const showMobileOpenButton = location.pathname === "/" || location.pathname === "/terminal"
+  const appName = state.appSettings?.appName ?? APP_NAME
   // Selected as the finished string rather than derived from the snapshot: the
   // title changes when a chat is renamed or a badge count moves, and this hook
   // should not re-render the layout for anything else the sidebar carries.
   const browserTitle = useSidebarStore((store) => getBrowserWindowTitle({
-    appName: APP_NAME,
+    appName,
     sidebarData: store.data,
     activeProjectId: state.activeProjectId,
     activeChatId: state.activeChatId,
@@ -352,7 +353,7 @@ function KannaLayout() {
     }
 
     function handlePageHide() {
-      document.title = APP_NAME
+      document.title = appName
     }
 
     window.addEventListener("pageshow", handlePageShow)
@@ -361,7 +362,7 @@ function KannaLayout() {
       window.removeEventListener("pageshow", handlePageShow)
       window.removeEventListener("pagehide", handlePageHide)
     }
-  }, [browserTitle])
+  }, [appName, browserTitle])
 
   // Driven by a store subscription rather than by a render: this compares
   // consecutive sidebar snapshots, and the layout is no longer re-rendered for
