@@ -185,6 +185,7 @@ interface ChatTranscriptViewportProps {
   activeChatId: string | null
   activeProjectId: string | null
   listRef: React.RefObject<TranscriptScrollHandle | null>
+  keyboardDockRef: React.RefObject<HTMLDivElement | null>
   messages: KannaState["messages"]
   queuedMessages: KannaState["queuedMessages"]
   transcriptPaddingBottom: number
@@ -310,6 +311,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   activeChatId,
   activeProjectId,
   listRef,
+  keyboardDockRef,
   messages,
   queuedMessages,
   transcriptPaddingBottom,
@@ -354,7 +356,8 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   // nothing and this component stays out of the scroll path entirely.
   const visibleRowRangeRef = useRef<VisibleRowRange | null>(null)
   const viewportRef = useRef<HTMLDivElement | null>(null)
-  const previousKeyboardInsetRef = useRef(0)
+  const previousKeyboardDockTopRef = useRef<number | null>(null)
+  const wasKeyboardActiveRef = useRef(false)
   useScrollbarGutterVar(viewportRef, scrollbarGutterHostRef, "--transcript-scrollbar-w")
   const localLinkMenuTriggerRef = useRef<HTMLSpanElement | null>(null)
   const [toolGroupExpanded, setToolGroupExpanded] = useState<Record<string, boolean>>({})
@@ -363,13 +366,21 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   const isMac = platform === "darwin"
 
   useLayoutEffect(() => {
-    const delta = getMobileKeyboardScrollDelta(previousKeyboardInsetRef.current, keyboardInset)
-    previousKeyboardInsetRef.current = keyboardInset
+    const dockTop = keyboardDockRef.current?.getBoundingClientRect().top ?? null
+    const previousDockTop = previousKeyboardDockTopRef.current
+    const wasKeyboardActive = wasKeyboardActiveRef.current
+    const isKeyboardActive = keyboardInset > 0
+    previousKeyboardDockTopRef.current = dockTop
+    wasKeyboardActiveRef.current = isKeyboardActive
+
+    if (previousDockTop === null || dockTop === null || (!isKeyboardActive && !wasKeyboardActive)) return
+
+    const delta = getMobileKeyboardScrollDelta(previousDockTop, dockTop)
     if (delta === 0) return
 
     const viewport = viewportRef.current
     if (viewport) viewport.scrollTop += delta
-  }, [keyboardInset])
+  }, [keyboardDockRef, keyboardInset, transcriptPaddingBottom])
 
   const rawRows = useMemo(() => buildResolvedTranscriptRows(messages, {
     isLoading: isProcessing,

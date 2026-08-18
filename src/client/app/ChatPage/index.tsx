@@ -1002,6 +1002,7 @@ export function ChatPage() {
           activeChatId={state.activeChatId}
           activeProjectId={state.activeProjectId}
           listRef={transcriptListRef}
+          keyboardDockRef={inputRef}
           messages={state.messages}
           queuedMessages={state.queuedMessages}
           transcriptPaddingBottom={effectiveTranscriptPaddingBottom}

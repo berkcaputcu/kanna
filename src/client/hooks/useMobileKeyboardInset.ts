@@ -19,9 +19,9 @@ export function getVisualViewportBottomInset(containerBottom: number, viewport: 
   return Math.max(0, Math.round(containerBottom - visibleBottom))
 }
 
-export function getMobileKeyboardScrollDelta(previousInset: number, nextInset: number) {
-  if (!Number.isFinite(previousInset) || !Number.isFinite(nextInset)) return 0
-  return nextInset - previousInset
+export function getMobileKeyboardScrollDelta(previousDockTop: number, nextDockTop: number) {
+  if (!Number.isFinite(previousDockTop) || !Number.isFinite(nextDockTop)) return 0
+  return previousDockTop - nextDockTop
 }
 
 /**

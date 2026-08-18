@@ -24,12 +24,12 @@ describe("getVisualViewportBottomInset", () => {
 })
 
 describe("getMobileKeyboardScrollDelta", () => {
-  test("moves the transcript by the newly covered amount", () => {
-    expect(getMobileKeyboardScrollDelta(0, 344)).toBe(344)
+  test("moves the transcript by the composer top edge movement", () => {
+    expect(getMobileKeyboardScrollDelta(600, 256)).toBe(344)
   })
 
   test("restores the transcript offset as the keyboard closes", () => {
-    expect(getMobileKeyboardScrollDelta(344, 0)).toBe(-344)
+    expect(getMobileKeyboardScrollDelta(256, 600)).toBe(-344)
   })
 
   test("ignores invalid insets", () => {
