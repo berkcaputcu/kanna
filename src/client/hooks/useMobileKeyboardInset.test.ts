@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { getVisualViewportBottomInset } from "./useMobileKeyboardInset"
+import { getMobileKeyboardScrollDelta, getVisualViewportBottomInset } from "./useMobileKeyboardInset"
 
 describe("getVisualViewportBottomInset", () => {
   test("returns zero when the visual viewport reaches the container bottom", () => {
@@ -20,5 +20,19 @@ describe("getVisualViewportBottomInset", () => {
 
   test("ignores invalid geometry", () => {
     expect(getVisualViewportBottomInset(Number.NaN, { height: 500, offsetTop: 0 })).toBe(0)
+  })
+})
+
+describe("getMobileKeyboardScrollDelta", () => {
+  test("moves the transcript by the newly covered amount", () => {
+    expect(getMobileKeyboardScrollDelta(0, 344)).toBe(344)
+  })
+
+  test("restores the transcript offset as the keyboard closes", () => {
+    expect(getMobileKeyboardScrollDelta(344, 0)).toBe(-344)
+  })
+
+  test("ignores invalid insets", () => {
+    expect(getMobileKeyboardScrollDelta(Number.NaN, 344)).toBe(0)
   })
 })

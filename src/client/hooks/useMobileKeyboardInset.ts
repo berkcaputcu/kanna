@@ -19,6 +19,11 @@ export function getVisualViewportBottomInset(containerBottom: number, viewport: 
   return Math.max(0, Math.round(containerBottom - visibleBottom))
 }
 
+export function getMobileKeyboardScrollDelta(previousInset: number, nextInset: number) {
+  if (!Number.isFinite(previousInset) || !Number.isFinite(nextInset)) return 0
+  return nextInset - previousInset
+}
+
 /**
  * Tracks the visual viewport while the chat input owns focus. The input and
  * chat card are siblings of the transcript scroller, so scrolling the

@@ -66,6 +66,7 @@ export const ChatInputDock = memo(function ChatInputDock({
           <ChatInput
             ref={chatInputRef}
             inputElementRef={chatInputElementRef}
+            keyboardInset={keyboardInset}
             onLayoutChange={onLayoutChange}
             key={activeChatId ?? "new-chat"}
             onSubmit={onSubmit}

@@ -1005,6 +1005,7 @@ export function ChatPage() {
           messages={state.messages}
           queuedMessages={state.queuedMessages}
           transcriptPaddingBottom={effectiveTranscriptPaddingBottom}
+          keyboardInset={keyboardInset}
           localPath={state.runtime?.localPath}
           latestToolIds={state.latestToolIds}
           isProcessing={state.isProcessing}
