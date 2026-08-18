@@ -11,7 +11,7 @@ describe("getVisualViewportBottomInset", () => {
   })
 
   test("accounts for a panned visual viewport", () => {
-    expect(getVisualViewportBottomInset(844, { height: 500, offsetTop: 40 })).toBe(304)
+    expect(getVisualViewportBottomInset(844, { height: 500, offsetTop: 40 })).toBe(344)
   })
 
   test("never returns a negative inset", () => {

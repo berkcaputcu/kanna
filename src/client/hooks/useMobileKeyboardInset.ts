@@ -11,12 +11,15 @@ export interface VisualViewportGeometry {
  * while leaving the layout viewport (and this app's absolute composer) alone.
  */
 export function getVisualViewportBottomInset(containerBottom: number, viewport: VisualViewportGeometry) {
-  if (!Number.isFinite(containerBottom) || !Number.isFinite(viewport.height) || !Number.isFinite(viewport.offsetTop)) {
+  if (!Number.isFinite(containerBottom) || !Number.isFinite(viewport.height)) {
     return 0
   }
 
-  const visibleBottom = viewport.offsetTop + viewport.height
-  return Math.max(0, Math.round(containerBottom - visibleBottom))
+  // getBoundingClientRect() is relative to the visual viewport. Using
+  // offsetTop here mixes it with layout-viewport coordinates and leaves a gap
+  // above the keyboard when the browser pans the visual viewport to focus the
+  // textarea.
+  return Math.max(0, Math.round(containerBottom - viewport.height))
 }
 
 export function getMobileKeyboardScrollDelta(previousDockTop: number, nextDockTop: number) {
