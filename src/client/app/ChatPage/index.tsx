@@ -25,6 +25,7 @@ import { TERMINAL_TOGGLE_ANIMATION_DURATION_MS } from "../terminalToggleAnimatio
 import { useRightSidebarToggleAnimation } from "../useRightSidebarToggleAnimation"
 import { useStickyChatFocus } from "../useStickyChatFocus"
 import { useTerminalToggleAnimation } from "../useTerminalToggleAnimation"
+import { useMobileKeyboardInset } from "../../hooks/useMobileKeyboardInset"
 import type { AgentProvider, ChatSkillsSnapshot, TranscriptEntry } from "../../../shared/types"
 import type { KannaState } from "../useKannaState"
 import { getNextMeasuredInputHeight, getTranscriptPaddingBottom } from "../useKannaState"
@@ -538,6 +539,8 @@ export function ChatPage() {
   }, [state.chatSnapshot?.messages])
 
   const isMobileViewport = useIsMobileViewport()
+  const keyboardInset = useMobileKeyboardInset(chatCardRef, chatInputElementRef, isMobileViewport)
+  const effectiveTranscriptPaddingBottom = transcriptPaddingBottom + keyboardInset
   const terminalLayout = useMemo(() => {
     const mainSizes = getEffectiveTerminalMainSizes(storedTerminalLayout.mainSizes, isMobileViewport)
     return mainSizes === storedTerminalLayout.mainSizes ? storedTerminalLayout : { ...storedTerminalLayout, mainSizes }
@@ -1001,7 +1004,7 @@ export function ChatPage() {
           listRef={transcriptListRef}
           messages={state.messages}
           queuedMessages={state.queuedMessages}
-          transcriptPaddingBottom={transcriptPaddingBottom}
+          transcriptPaddingBottom={effectiveTranscriptPaddingBottom}
           localPath={state.runtime?.localPath}
           latestToolIds={state.latestToolIds}
           isProcessing={state.isProcessing}
@@ -1041,6 +1044,7 @@ export function ChatPage() {
 
       <ChatInputDock
         inputRef={inputRef}
+        keyboardInset={keyboardInset}
         onLayoutChange={syncInputHeight}
         chatInputRef={chatInputRef}
         chatInputElementRef={chatInputElementRef}
