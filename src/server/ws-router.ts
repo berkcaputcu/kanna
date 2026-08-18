@@ -19,7 +19,6 @@ import { installSkill, listGlobalSkillsWithSources, listInstalledSkills, searchS
 import { TerminalManager } from "./terminal-manager"
 import type { WorktreeProbe } from "./worktree-probe"
 import type { ProviderAuthManager } from "./provider-auth"
-import type { UpdateManager } from "./update-manager"
 import type { UsageLimitsManager } from "./usage-limits"
 import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
 import type {
@@ -78,7 +77,6 @@ interface CreateWsRouterArgs {
   refreshDiscovery: () => Promise<DiscoveredProject[]>
   getDiscoveredProjects: () => DiscoveredProject[]
   machineDisplayName: string
-  updateManager: UpdateManager | null
   usageLimits?: Pick<UsageLimitsManager, "getSnapshot" | "refresh" | "onChange"> | null
   providerAuth?: Pick<
     ProviderAuthManager,
@@ -98,7 +96,6 @@ interface CreateWsRouterArgs {
 interface SnapshotBroadcastFilter {
   includeSidebar?: boolean
   includeLocalProjects?: boolean
-  includeUpdate?: boolean
   includeKeybindings?: boolean
   includeAppSettings?: boolean
   includeUsageLimits?: boolean
@@ -166,7 +163,6 @@ export function createWsRouter({
   refreshDiscovery,
   getDiscoveredProjects,
   machineDisplayName,
-  updateManager,
   usageLimits,
   providerAuth,
 }: CreateWsRouterArgs) {
@@ -241,9 +237,6 @@ export function createWsRouter({
     }
     if (topic.type === "local-projects") {
       return Boolean(filter.includeLocalProjects)
-    }
-    if (topic.type === "update") {
-      return Boolean(filter.includeUpdate)
     }
     if (topic.type === "keybindings") {
       return Boolean(filter.includeKeybindings)
@@ -386,27 +379,6 @@ export function createWsRouter({
         snapshot: {
           type: "provider-auth",
           data: providerAuth?.getSnapshot() ?? { services: [] },
-        },
-      }
-    }
-
-    if (topic.type === "update") {
-      return {
-        v: PROTOCOL_VERSION,
-        type: "snapshot",
-        id,
-        snapshot: {
-          type: "update",
-          data: updateManager?.getSnapshot() ?? {
-            currentVersion: "unknown",
-            latestVersion: null,
-            status: "idle",
-            updateAvailable: false,
-            lastCheckedAt: null,
-            error: null,
-            installAction: "restart",
-            reloadRequestedAt: null,
-          },
         },
       }
     }
@@ -764,20 +736,6 @@ export function createWsRouter({
     }
   })
 
-  const disposeUpdateEvents = updateManager?.onChange(() => {
-    for (const ws of sockets) {
-      const snapshotSignatures = ensureSnapshotSignatures(ws)
-      for (const [id, topic] of ws.data.subscriptions.entries()) {
-        if (topic.type !== "update") continue
-        const envelope = createEnvelope(id, topic)
-        if (envelope.type !== "snapshot") continue
-        const signature = JSON.stringify(envelope.snapshot)
-        if (snapshotSignatures.get(id) === signature) continue
-        snapshotSignatures.set(id, signature)
-        send(ws, envelope)
-      }
-    }
-  }) ?? (() => {})
 
   const disposeUsageLimitsEvents = usageLimits?.onChange(() => {
     for (const ws of sockets) {
@@ -916,51 +874,6 @@ export function createWsRouter({
           }
           const result = await writeProjectQuickActions(project.localPath, command.quickActions)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
-          return
-        }
-        case "update.check": {
-          const snapshot = updateManager
-            ? await updateManager.checkForUpdates({ force: command.force })
-            : {
-                currentVersion: "unknown",
-                latestVersion: null,
-                status: "error",
-                updateAvailable: false,
-                lastCheckedAt: Date.now(),
-                error: "Update manager unavailable.",
-                installAction: "restart",
-                reloadRequestedAt: null,
-              }
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
-          return
-        }
-        case "update.installNightly": {
-          if (!updateManager) {
-            throw new Error("Update manager unavailable.")
-          }
-          const result = await updateManager.installNightly()
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
-          return
-        }
-        case "update.installStable": {
-          if (!updateManager) {
-            throw new Error("Update manager unavailable.")
-          }
-          const result = await updateManager.installStable()
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
-          return
-        }
-        case "update.install": {
-          if (!updateManager) {
-            throw new Error("Update manager unavailable.")
-          }
-          const result = await updateManager.installUpdate()
-          send(ws, {
-            v: PROTOCOL_VERSION,
-            type: "ack",
-            id,
-            result,
-          })
           return
         }
         case "settings.readKeybindings": {
@@ -1641,7 +1554,6 @@ export function createWsRouter({
       disposeTerminalEvents()
       disposeKeybindingEvents()
       disposeAppSettingsEvents()
-      disposeUpdateEvents()
       disposeUsageLimitsEvents()
       disposeProviderAuthEvents()
     },

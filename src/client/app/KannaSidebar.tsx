@@ -18,7 +18,7 @@ import { Kbd } from "../components/ui/kbd"
 import { SidebarViewSwitcher, type SidebarView } from "../components/chat-ui/sidebar/SidebarViewSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { useIsStandalone } from "../hooks/useIsStandalone"
-import type { ChatTouchedFilesResult, KeybindingsSnapshot, SidebarChatRow, UpdateSnapshot } from "../../shared/types"
+import type { ChatTouchedFilesResult, KeybindingsSnapshot, SidebarChatRow } from "../../shared/types"
 import type { SocketStatus } from "./socket"
 import {
   getSidebarJumpTargetIndex,
@@ -97,8 +97,6 @@ interface KannaSidebarProps {
   onHideProject: (projectId: string) => void
   onReorderProjectGroups: (projectIds: string[]) => void
   editorLabel: string
-  updateSnapshot: UpdateSnapshot | null
-  onOpenChangelog: () => void
 }
 
 function KannaSidebarImpl({
@@ -129,8 +127,6 @@ function KannaSidebarImpl({
   onHideProject,
   onReorderProjectGroups,
   editorLabel,
-  updateSnapshot,
-  onOpenChangelog,
 }: KannaSidebarProps) {
   // The one place that wants the whole snapshot. Selected here rather than
   // passed down so a sidebar push re-renders this component and nothing above
@@ -479,12 +475,6 @@ function KannaSidebarImpl({
   const isConnecting = connectionStatus === "connecting" || !ready
   const statusLabel = isConnecting ? "Connecting" : connectionStatus === "connected" ? "Connected" : "Disconnected"
   const statusDotClass = connectionStatus === "connected" ? "bg-emerald-500" : "bg-amber-500"
-  const showUpdateButton = updateSnapshot?.updateAvailable === true
-  const showDevBadge = updateSnapshot
-    ? updateSnapshot.latestVersion === `${updateSnapshot.currentVersion}-dev`
-    : false
-  const isUpdating = updateSnapshot?.status === "updating" || updateSnapshot?.status === "restart_pending"
-
   return (
     <>
       {!open && showMobileOpenButton && (
@@ -605,26 +595,6 @@ function KannaSidebarImpl({
                 title="Projects"
               >
                 <House className="h-5 w-5" />
-              </Button>
-            ) : null}
-            {showDevBadge ? (
-              <span
-                className="mr-1 hidden md:inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-bold tracking-wider text-muted-foreground"
-                title="Development build"
-              >
-                DEV
-              </span>
-            ) : showUpdateButton ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="hidden md:inline-flex rounded-full !h-auto mr-1 py-0.5 px-2 bg-logo/20 hover:bg-logo text-logo border-logo/20 hover:text-foreground hover:border-logo/20 text-[11px] font-bold tracking-wider"
-                onClick={onOpenChangelog}
-                disabled={isUpdating}
-                title={updateSnapshot?.latestVersion ? `Update to ${updateSnapshot.latestVersion}` : "Update Kanna"}
-              >
-                {isUpdating ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : null}
-                UPDATE
               </Button>
             ) : null}
             <Button

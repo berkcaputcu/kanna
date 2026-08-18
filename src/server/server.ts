@@ -1,6 +1,6 @@
 import path from "node:path"
 import { stat } from "node:fs/promises"
-import { APP_NAME, getRuntimeProfile, LOG_PREFIX } from "../shared/branding"
+import { APP_NAME, LOG_PREFIX } from "../shared/branding"
 import type { ChatAttachment } from "../shared/types"
 import type { ShareMode } from "../shared/share"
 import {
@@ -29,9 +29,6 @@ import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
 import { getMachineDisplayName } from "./machine-name"
 import { TerminalManager } from "./terminal-manager"
-import { UpdateManager } from "./update-manager"
-import type { UpdateInstallAttemptResult } from "./cli-runtime"
-import type { NightlyInstallResult } from "./nightly"
 import { createWsRouter, type ClientState } from "./ws-router"
 import { instanceFingerprint } from "./instance"
 import { deleteProjectUpload, inferAttachmentContentType, inferProjectFileContentType, persistProjectUpload } from "./uploads"
@@ -114,19 +111,12 @@ export interface StartKannaServerOptions {
    */
   directCloud?: boolean
   onMigrationProgress?: (message: string) => void
-  update?: {
-    version: string
-    fetchLatestVersion: (packageName: string) => Promise<string>
-    installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
-    installNightly?: () => Promise<NightlyInstallResult>
-  }
 }
 
 export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const port = options.port ?? 3210
   const hostname = options.host ?? "127.0.0.1"
   const strictPort = options.strictPort ?? false
-  const runtimeProfile = getRuntimeProfile()
   const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
   const store = new EventStore(options.dataDir)
   const diffStore = new DiffStore(store.dataDir)
@@ -189,15 +179,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const appSettings = new AppSettingsManager(path.join(store.dataDir, "settings.json"), { devbox: devboxUi })
   await appSettings.initialize()
   await keybindings.initialize()
-  const updateManager = options.update
-    ? new UpdateManager({
-      currentVersion: options.update.version,
-      fetchLatestVersion: options.update.fetchLatestVersion,
-      installVersion: options.update.installVersion,
-      installNightly: options.update.installNightly,
-      devMode: runtimeProfile === "dev",
-    })
-    : null
   const codexManager = new CodexAppServerManager()
   const agent = new AgentCoordinator({
     store,
@@ -260,7 +241,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     refreshDiscovery,
     getDiscoveredProjects: () => discoveredProjects,
     machineDisplayName,
-    updateManager,
     providerAuth,
   })
   // Overlay the account's live Cursor model list on the static catalog
@@ -545,7 +525,6 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     port: actualPort,
     store,
     diffStore,
-    updateManager,
     stop: shutdown,
   }
 }

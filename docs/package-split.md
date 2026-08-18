@@ -243,13 +243,12 @@ are in `protocol`; the implementation is a host concern.
 
 ### `kanna` — the channel
 
-Everything that makes it Kanna: CLI, updater, nightly, instance lock, cloud
+Everything that makes it Kanna: CLI, instance lock, cloud
 tunnel + CLI pairing, onboarding, setup wizard, settings, keybindings,
 machine name, share tunnel, command palette, sidebar composition,
 `worktree-probe` scheduling, project discovery, the React app shell.
 
-Stays: `cli.ts`, `cli-runtime.ts`, `cli-supervisor.ts`, `restart.ts`,
-`nightly.ts`, `instance.ts`, `update-manager.ts`, `machine-name.ts`,
+Stays: `cli.ts`, `cli-runtime.ts`, `instance.ts`, `machine-name.ts`,
 `app-settings.ts`, `keybindings.ts`, `discovery.ts`,
 `worktree-probe.ts`, `skills.ts`, `share.ts`,
 `project-quick-actions.ts`, `cloud/*`, and the client's `app/`, `settings/`,
@@ -261,7 +260,7 @@ Stays: `cli.ts`, `cli-runtime.ts`, `cli-supervisor.ts`, `restart.ts`,
 
 `protocol` owns the core topics: `chat`, `sidebar`, `project-git`, `terminal`.
 
-Kanna's own topics — `app-settings`, `update`, `keybindings`, `provider-auth`,
+Kanna's own topics — `app-settings`, `keybindings`, `provider-auth`,
 `usage-limits`, `llm-provider`, `skills` — are roughly 327 lines of
 `shared/types.ts` (lines 1064–1390) that stay in the app and get composed into
 the union it hands the broker.
@@ -462,7 +461,7 @@ That bottom row is the entire argument for this refactor.
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  kanna  (the product — unchanged)                                        │
-│  CLI · updater · cloud tunnel + pair · onboarding · settings ·           │
+│  CLI · cloud tunnel + pair · onboarding · settings ·                     │
 │  keybindings · command palette · sidebar · share tunnel                   │
 │  worktree-probe scheduling · project discovery                          │
 └──────┬────────────────────────────────────────────────────┬──────────────┘
@@ -564,7 +563,7 @@ of today's 116 test files:
 | `git` | 12 | `diff-store.test.ts`, `github.test.ts` |
 | `chat-ui` | 14 | `KannaTranscript.test.tsx`, message component tests |
 | `server` | 8 | terminal, auth, routes |
-| `kanna` (app) | 32 | cloud, cli-runtime, update, settings, integration |
+| `kanna` (app) | 30 | cloud, cli-runtime, settings, integration |
 
 `ws-router.test.ts` (2322 lines) stays with the app as the end-to-end contract
 test — this is the "kanna tests it all put together" file.

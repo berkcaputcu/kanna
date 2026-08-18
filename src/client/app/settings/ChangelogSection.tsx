@@ -1,11 +1,9 @@
 import { useEffect, useState } from "react"
-import { DownloadCloud, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import type { UpdateSnapshot } from "../../../shared/types"
 import { markdownComponents } from "../../components/messages/shared"
 import { buttonVariants } from "../../components/ui/button"
-import { SettingsHeaderButton } from "../../components/ui/settings-header-button"
 import { cn } from "../../lib/utils"
 
 const GITHUB_RELEASES_URL = "https://api.github.com/repos/jakemor/kanna/releases"
@@ -158,25 +156,16 @@ export function ChangelogSection({
   releases,
   error,
   onRetry,
-  updateSnapshot,
   currentVersion,
-  onInstallUpdate,
-  onCheckForUpdates,
 }: {
   status: ChangelogStatus
   releases: GithubRelease[]
   error: string | null
   onRetry: () => void
-  updateSnapshot: UpdateSnapshot | null
   currentVersion: string
-  onInstallUpdate: () => void
-  onCheckForUpdates: () => void
 }) {
-  const latestVersion = updateSnapshot?.latestVersion ?? releases[0]?.tag_name ?? "Unknown"
-  const currentVersionLabel = updateSnapshot?.currentVersion ?? currentVersion
-  const isChecking = updateSnapshot?.status === "checking"
-  const isUpdating = updateSnapshot?.status === "updating" || updateSnapshot?.status === "restart_pending"
-  const canInstallUpdate = updateSnapshot?.updateAvailable === true
+  const latestVersion = releases[0]?.tag_name ?? "Unknown"
+  const currentVersionLabel = currentVersion
   const normalizedLatestVersion = latestVersion.replace(/^v/i, "")
   const normalizedCurrentVersion = currentVersionLabel.replace(/^v/i, "")
 
@@ -217,18 +206,6 @@ export function ChangelogSection({
           <div className="mt-2 text-sm text-muted-foreground">
             GitHub did not return any published releases for this repository.
           </div>
-        </div>
-      ) : null}
-
-      {!canInstallUpdate && status === "success" ? (
-        <div className="flex justify-end">
-          <SettingsHeaderButton
-            variant="outline"
-            onClick={onCheckForUpdates}
-            disabled={isChecking || isUpdating}
-          >
-            {isChecking ? "Checking…" : "Check for updates"}
-          </SettingsHeaderButton>
         </div>
       ) : null}
 
@@ -287,19 +264,6 @@ export function ChangelogSection({
                     </span>
                   ) : null}
 
-                  {isLatestRelease && canInstallUpdate ? (
-                    <SettingsHeaderButton
-                      variant="default"
-                      className=""
-                      onClick={onInstallUpdate}
-                      disabled={isUpdating}
-                    >
-                      <div className="flex flex-row items-center justify-center gap-2">
-                        <DownloadCloud className="size-4" />
-                        {isUpdating ? "Updating…" : "Update"}
-                      </div>
-                    </SettingsHeaderButton>
-                  ) : null}
                 </div>
               </div>
 

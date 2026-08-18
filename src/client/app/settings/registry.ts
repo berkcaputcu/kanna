@@ -80,12 +80,6 @@ function defineRows<TIds extends string>(
 
 export const SETTINGS_ROWS = defineRows({
   // General
-  applicationUpdate: {
-    sectionId: "general",
-    title: "Application Update",
-    description: "Current version and update status.",
-    keywords: ["version", "upgrade", "latest"],
-  },
   appName: {
     sectionId: "general",
     title: "Application Name",
@@ -201,12 +195,6 @@ export const SETTINGS_ROWS = defineRows({
     title: "Terminal GPU rendering",
     description: "Draw the embedded terminal with xterm's WebGL renderer instead of the DOM one. Faster with heavy output; falls back to the DOM renderer if the GPU context is unavailable or lost. Reopens open terminals.",
     keywords: ["terminal", "webgl", "gpu", "renderer", "performance", "acceleration", "experimental"],
-  },
-  nightlyBuilds: {
-    sectionId: "labs",
-    title: "Nightly builds",
-    description: "Run the newest changes from main — downloaded from GitHub and built from source on this machine.",
-    keywords: ["nightly", "main", "update", "channel", "stable", "prerelease", "build"],
   },
 })
 

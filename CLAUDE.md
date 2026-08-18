@@ -26,7 +26,7 @@ React client (src/client)
 
 - **Everything the client renders comes from server snapshots** pushed per
   subscription topic (`sidebar`, `chat`, `project-git`, `local-projects`,
-  `update`, `keybindings`, `app-settings`, `terminal`). The client sends
+  `keybindings`, `app-settings`, `terminal`). The client sends
   commands; it never mutates server state locally except optimistic user
   prompts (reconciled by content signature).
 - Snapshot pushes dedupe by signature: sidebar/chat use the serialized

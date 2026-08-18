@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useShallow } from "zustand/react/shallow"
-import { PROVIDERS, withPiFaveModels, type AgentProvider, type AppSettingsPatch, type AskUserQuestionAnswerMap, type AppSettingsSnapshot, type ChatDiffSnapshot, type FaveModel, type KeybindingsSnapshot, type LlmProviderSnapshot, type LlmProviderValidationResult, type ModelOptions, type ProviderCatalogEntry, type QueuedChatMessage, type TranscriptEntry, type UpdateSnapshot } from "../../shared/types"
+import { PROVIDERS, withPiFaveModels, type AgentProvider, type AppSettingsPatch, type AskUserQuestionAnswerMap, type AppSettingsSnapshot, type ChatDiffSnapshot, type FaveModel, type KeybindingsSnapshot, type LlmProviderSnapshot, type LlmProviderValidationResult, type ModelOptions, type ProviderCatalogEntry, type QueuedChatMessage, type TranscriptEntry } from "../../shared/types"
 import { NEW_CHAT_COMPOSER_ID, useChatPreferencesStore } from "../stores/chatPreferencesStore"
 import { useRightSidebarStore } from "../stores/rightSidebarStore"
 import { useTerminalLayoutStore } from "../stores/terminalLayoutStore"
@@ -55,14 +55,7 @@ import { useAppSettingsSync } from "./useAppSettingsSync"
 import { useChatCommands } from "./useChatCommands"
 import { useChatReadAnchor, type ChatReadAnchorState } from "./useChatReadAnchor"
 import { useSendMessage } from "./useSendMessage"
-import { useUpdateRestart } from "./useUpdateRestart"
 import type { EditorOpenSettings, OpenExternalAction } from "../../shared/protocol"
-
-export {
-  getUiUpdateReadinessPath,
-  getUiUpdateRestartReconnectAction,
-  shouldHandleUiUpdateReloadRequest,
-} from "./useUpdateRestart"
 
 export {
   applySidebarProjectOrder,
@@ -159,7 +152,6 @@ export interface KannaState {
   activeChatId: string | null
   activeProjectId: string | null
   localProjects: LocalProjectsSnapshot | null
-  updateSnapshot: UpdateSnapshot | null
   chatSnapshot: ChatSnapshot | null
   /** Server-stored read position for the active chat; drives restore on open. */
   readAnchorState: ChatReadAnchorState
@@ -204,10 +196,6 @@ export interface KannaState {
   handleForkChat: (chat: SidebarChatRow) => Promise<void>
   handleOpenLocalProject: (localPath: string) => Promise<void>
   handleCreateProject: (project: ProjectRequest) => Promise<void>
-  handleCheckForUpdates: (options?: { force?: boolean }) => Promise<void>
-  handleInstallUpdate: () => Promise<void>
-  handleInstallNightly: () => Promise<void>
-  handleInstallStable: () => Promise<void>
   handleReadAppSettings: () => Promise<void>
   handleWriteAppSettings: (patch: AppSettingsPatch) => Promise<void>
   handleReadLlmProvider: () => Promise<void>
@@ -308,13 +296,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
       setCommandError(null)
     })
   }, [socket])
-
-  const { updateSnapshot, handleCheckForUpdates, handleInstallUpdate, handleInstallNightly, handleInstallStable } = useUpdateRestart({
-    socket,
-    connectionStatus,
-    dialog,
-    setCommandError,
-  })
 
   const {
     keybindings,
@@ -889,7 +870,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     activeChatId,
     activeProjectId,
     localProjects,
-    updateSnapshot,
     chatSnapshot,
     readAnchorState,
     reportReadAnchor,
@@ -927,10 +907,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleForkChat,
     handleOpenLocalProject,
     handleCreateProject,
-    handleCheckForUpdates,
-    handleInstallUpdate,
-    handleInstallNightly,
-    handleInstallStable,
     handleReadAppSettings,
     handleWriteAppSettings,
     handleReadLlmProvider,

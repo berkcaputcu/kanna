@@ -51,14 +51,11 @@ const chatSoundPreferenceOptions: { value: ChatSoundPreference; label: string }[
 
 export function GeneralSection({
   state,
-  appVersion,
 }: {
-  state: Pick<KannaState, "updateSnapshot" | "appSettings" | "handleWriteAppSettings">
-  appVersion: string
+  state: Pick<KannaState, "appSettings" | "handleWriteAppSettings">
 }) {
   const { theme, setTheme } = useTheme()
   const appSettings = state.appSettings
-  const updateSnapshot = state.updateSnapshot
   const handleWriteAppSettings = state.handleWriteAppSettings
 
   const scrollbackLines = useTerminalPreferencesStore((store) => store.scrollbackLines)
@@ -82,20 +79,6 @@ export function GeneralSection({
   const newProjectsDirectory = appSettings?.newProjectsDirectory ?? DEFAULT_NEW_PROJECTS_DIRECTORY
   const [newProjectsDirectoryDraft, setNewProjectsDirectoryDraft] = useState(newProjectsDirectory)
   const [appSettingsError, setAppSettingsError] = useState<string | null>(null)
-
-  const updateStatusLabel = updateSnapshot?.status === "checking"
-    ? "Checking for updates…"
-    : updateSnapshot?.status === "updating"
-      ? "Installing update…"
-      : updateSnapshot?.status === "restart_pending"
-        ? "Restarting Kanna…"
-        : updateSnapshot?.status === "available"
-          ? `Update available${updateSnapshot.latestVersion ? `: ${updateSnapshot.latestVersion}` : ""}`
-          : updateSnapshot?.status === "up_to_date"
-            ? "Up to date"
-            : updateSnapshot?.status === "error"
-              ? "Update check failed"
-              : "Not checked yet"
 
   useEffect(() => {
     setScrollbackDraft(String(scrollbackLines))
@@ -236,34 +219,6 @@ export function GeneralSection({
     <>
       {appSettingsError ? <SettingsErrorBanner message={appSettingsError} /> : null}
       <div className="border-b border-border">
-        <SettingsRow
-          def={SETTINGS_ROWS.applicationUpdate}
-          description={(
-            <>
-              <span>{updateStatusLabel}.</span>
-              {updateSnapshot?.lastCheckedAt ? (
-                <span> Last checked {new Intl.DateTimeFormat(undefined, {
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                }).format(updateSnapshot.lastCheckedAt)}.</span>
-              ) : null}
-              {updateSnapshot?.error ? (
-                <span> {updateSnapshot.error}</span>
-              ) : null}
-            </>
-          )}
-          bordered={false}
-        >
-          <div className="text-right text-sm text-foreground">
-            <div>Current: {updateSnapshot?.currentVersion ?? appVersion}</div>
-            <div className="text-xs text-muted-foreground">
-              Latest: {updateSnapshot?.latestVersion ?? "Unknown"}
-            </div>
-          </div>
-        </SettingsRow>
-
         <SettingsRow def={SETTINGS_ROWS.appName}>
           <Input
             type="text"

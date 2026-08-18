@@ -232,7 +232,7 @@ src/
 ├── client/          React UI layer
 │   ├── app/         App router, pages, socket client, useKannaState + feature hooks
 │   │                (useChatCommands, useSendMessage, useAppSettingsSync,
-│   │                useUpdateRestart, snapshotEquality)
+│   │                snapshotEquality)
 │   ├── components/  Messages, chat chrome (incl. chat-ui/git/ panel modules),
 │   │                dialogs, buttons, inputs
 │   ├── hooks/       Theme, standalone mode detection

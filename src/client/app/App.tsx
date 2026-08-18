@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
-import { Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom"
+import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom"
 import { Flower } from "lucide-react"
 import { CommandPalette } from "../components/command-palette/CommandPalette"
 import { AppDialogProvider } from "../components/ui/app-dialog"
@@ -198,7 +198,6 @@ export function shouldPlayChatNotificationSound(
 
 function KannaLayout() {
   const location = useLocation()
-  const navigate = useNavigate()
   const params = useParams()
   const state = useKannaState(params.chatId ?? null)
 
@@ -302,9 +301,6 @@ function KannaLayout() {
   const handleSidebarReorderProjectGroups = useCallback((projectIds: string[]) => {
     void state.handleReorderProjectGroups(projectIds)
   }, [state.handleReorderProjectGroups])
-  const handleOpenChangelog = useCallback(() => {
-    navigate("/settings/changelog")
-  }, [navigate])
   // Rendered inline rather than through a `useMemo`: `KannaSidebar` is memoized
   // and every prop below is now stable, so React skips it on its own. The memo
   // wrapper used to be defeated anyway — its dep list named the sidebar
@@ -338,8 +334,6 @@ function KannaLayout() {
       onHideProject={handleSidebarHideProject}
       onReorderProjectGroups={handleSidebarReorderProjectGroups}
       editorLabel={state.editorLabel}
-      updateSnapshot={state.updateSnapshot}
-      onOpenChangelog={handleOpenChangelog}
     />
   )
 

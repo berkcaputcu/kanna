@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
-import { RefreshCw } from "lucide-react"
 import {
   ChangelogSection,
   fetchGithubReleases,
@@ -14,8 +13,6 @@ import {
   shouldPreviewChatSoundChange,
   SkillsSection,
 } from "./SettingsPage"
-import { SettingsHeaderButton } from "../components/ui/settings-header-button"
-import type { UpdateSnapshot } from "../../shared/types"
 
 const SAMPLE_RELEASES = [
   {
@@ -43,20 +40,6 @@ const SAMPLE_RELEASES = [
 afterEach(() => {
   resetSettingsPageChangelogCache()
 })
-
-function createUpdateSnapshot(overrides: Partial<UpdateSnapshot> = {}): UpdateSnapshot {
-  return {
-    currentVersion: "1.0.0",
-    latestVersion: "1.1.0",
-    status: "available",
-    updateAvailable: true,
-    lastCheckedAt: 123,
-    error: null,
-    installAction: "restart",
-    reloadRequestedAt: null,
-    ...overrides,
-  }
-}
 
 describe("fetchGithubReleases", () => {
   test("filters draft releases and sends the GitHub accept header", async () => {
@@ -183,31 +166,6 @@ describe("shouldPreviewChatSoundChange", () => {
   })
 })
 
-describe("SettingsHeaderButton", () => {
-  test("renders shared header button content and icon", () => {
-    const html = renderToStaticMarkup(
-      <SettingsHeaderButton icon={<RefreshCw className="size-3.5" />}>
-        Check for updates
-      </SettingsHeaderButton>
-    )
-
-    expect(html).toContain("Check for updates")
-    expect(html).toContain("lucide-refresh-cw")
-    expect(html).toContain("gap-1.5")
-  })
-
-  test("supports the default variant for the update action", () => {
-    const html = renderToStaticMarkup(
-      <SettingsHeaderButton variant="default" >
-        Update
-      </SettingsHeaderButton>
-    )
-
-    expect(html).toContain("Update")
-    expect(html).toContain("bg-primary")
-  })
-})
-
 describe("ChangelogSection", () => {
   test("renders version highlights, release cards, markdown, links, and prerelease badges", () => {
     const html = renderToStaticMarkup(
@@ -216,17 +174,12 @@ describe("ChangelogSection", () => {
         releases={SAMPLE_RELEASES}
         error={null}
         onRetry={() => {}}
-        updateSnapshot={createUpdateSnapshot({ latestVersion: "0.8.1", currentVersion: "0.8.1" })}
         currentVersion="1.0.0"
-        onInstallUpdate={() => {}}
-        onCheckForUpdates={() => {}}
       />
     )
 
     expect(html).not.toContain("You are currently running this version of Kanna.")
-    expect(html).toContain("Current")
-    expect(html).toContain("Update")
-    expect(html).toContain("Update")
+    expect(html).not.toContain(">Update<")
     expect(html).toContain("v0.8.1")
     expect(html).toContain("Better cursor color")
     expect(html).toContain('aria-label="View release on GitHub"')
@@ -244,10 +197,7 @@ describe("ChangelogSection", () => {
         releases={[]}
         error="GitHub said no"
         onRetry={() => {}}
-        updateSnapshot={createUpdateSnapshot({ updateAvailable: false, status: "error", error: "GitHub said no" })}
         currentVersion="1.0.0"
-        onInstallUpdate={() => {}}
-        onCheckForUpdates={() => {}}
       />
     )
 
@@ -256,46 +206,4 @@ describe("ChangelogSection", () => {
     expect(html).toContain("Retry")
   })
 
-  test("renders check-for-updates when no update is available", () => {
-    const html = renderToStaticMarkup(
-      <ChangelogSection
-        status="success"
-        releases={SAMPLE_RELEASES}
-        error={null}
-        onRetry={() => {}}
-        updateSnapshot={createUpdateSnapshot({
-          latestVersion: "1.0.0",
-          status: "up_to_date",
-          updateAvailable: false,
-        })}
-        currentVersion="1.0.0"
-        onInstallUpdate={() => {}}
-        onCheckForUpdates={() => {}}
-      />
-    )
-
-    expect(html).toContain("Check for updates")
-    expect(html).not.toContain(">Update<")
-  })
-
-  test("disables the update action while updating", () => {
-    const html = renderToStaticMarkup(
-      <ChangelogSection
-        status="success"
-        releases={SAMPLE_RELEASES}
-        error={null}
-        onRetry={() => {}}
-        updateSnapshot={createUpdateSnapshot({
-          latestVersion: "0.8.1",
-          status: "restart_pending",
-        })}
-        currentVersion="1.0.0"
-        onInstallUpdate={() => {}}
-        onCheckForUpdates={() => {}}
-      />
-    )
-
-    expect(html).toContain("disabled")
-    expect(html).toContain("Updating")
-  })
 })

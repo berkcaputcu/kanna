@@ -1,13 +1,9 @@
 import process from "node:process"
-import { spawnSync } from "node:child_process"
-import { hasCommand, spawnDetached } from "./process-utils"
-import { APP_NAME, CLI_COMMAND, getDataDirDisplay, LOG_PREFIX, PACKAGE_NAME } from "../shared/branding"
+import { spawnDetached } from "./process-utils"
+import { APP_NAME, CLI_COMMAND, getDataDirDisplay, LOG_PREFIX } from "../shared/branding"
 import type { ShareMode } from "../shared/share"
 import { assertNoHostOverride, getShareCliFlag, isShareEnabled, isTokenShareMode } from "../shared/share"
-import type { UpdateInstallErrorCode } from "../shared/types"
-import { repairBunGlobalManifest, type NightlyInstallResult } from "./nightly"
 import { PROD_SERVER_PORT } from "../shared/ports"
-import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 import { logShareDetails, renderTerminalQr, startShareTunnel, type StartedShareTunnel } from "./share"
 import { probeExistingInstance, type ExistingInstance } from "./instance"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
@@ -34,24 +30,9 @@ export interface CliOptions {
   directCloud: boolean
 }
 
-export interface CliUpdateOptions {
-  version: string
-  fetchLatestVersion: (packageName: string) => Promise<string>
-  installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
-  /** Build main from source and install it globally (see server/nightly.ts). */
-  installNightly?: () => Promise<NightlyInstallResult>
-  argv: string[]
-  command: string
-}
-
 export interface StartedCli {
   kind: "started"
   stop: () => Promise<void>
-}
-
-export interface RestartingCli {
-  kind: "restarting"
-  reason: "startup_update" | "ui_update"
 }
 
 export interface ExitedCli {
@@ -59,20 +40,16 @@ export interface ExitedCli {
   code: number
 }
 
-export type CliRunResult = StartedCli | RestartingCli | ExitedCli
+export type CliRunResult = StartedCli | ExitedCli
 
 export interface CliRuntimeDeps {
   version: string
   bunVersion: string
   startServer: (options: CliOptions & {
-    update: CliUpdateOptions
     onMigrationProgress?: (message: string) => void
     trustProxy?: boolean
     cloud?: CloudRuntime | null
   }) => Promise<{ port: number; stop: () => Promise<void> }>
-  fetchLatestVersion: (packageName: string) => Promise<string>
-  installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
-  installNightly?: () => Promise<NightlyInstallResult>
   openUrl: (url: string) => void
   log: (message: string) => void
   warn: (message: string) => void
@@ -82,13 +59,6 @@ export interface CliRuntimeDeps {
   readCloudIdentityImpl?: (warn: (message: string) => void) => Promise<CloudIdentity | null>
   createCloudRuntimeImpl?: (identity: CloudIdentity) => CloudRuntime
   probeExistingInstanceImpl?: (port: number) => Promise<ExistingInstance | null>
-}
-
-export interface UpdateInstallAttemptResult {
-  ok: boolean
-  errorCode: UpdateInstallErrorCode | null
-  userTitle: string | null
-  userMessage: string | null
 }
 
 type ParsedArgs =
@@ -298,43 +268,6 @@ function normalizeVersion(version: string) {
     .filter((part) => Number.isFinite(part))
 }
 
-async function maybeSelfUpdate(_argv: string[], deps: CliRuntimeDeps) {
-  if (process.env.KANNA_DISABLE_SELF_UPDATE === "1") {
-    return null
-  }
-
-  deps.log(`${LOG_PREFIX} checking for updates`)
-
-  let latestVersion: string
-  try {
-    latestVersion = await deps.fetchLatestVersion(PACKAGE_NAME)
-  }
-  catch (error) {
-    deps.warn(`${LOG_PREFIX} update check failed, continuing current version`)
-    if (error instanceof Error && error.message) {
-      deps.warn(`${LOG_PREFIX} ${error.message}`)
-    }
-    return null
-  }
-
-  if (!latestVersion || compareVersions(deps.version, latestVersion) >= 0) {
-    return null
-  }
-
-  deps.log(`${LOG_PREFIX} installing ${PACKAGE_NAME}@${latestVersion}`)
-  const installResult = deps.installVersion(PACKAGE_NAME, latestVersion)
-  if (!installResult.ok) {
-    deps.warn(`${LOG_PREFIX} update failed, continuing current version`)
-    if (installResult.userMessage) {
-      deps.warn(`${LOG_PREFIX} ${installResult.userMessage}`)
-    }
-    return null
-  }
-
-  deps.log(`${LOG_PREFIX} restarting into updated version`)
-  return "startup_update"
-}
-
 export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliRunResult> {
   let parsedArgs = parseArgs(argv)
   if (parsedArgs.kind === "version") {
@@ -372,11 +305,6 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     return { kind: "exited", code: 1 }
   }
 
-  const shouldRestart = await maybeSelfUpdate(argv, deps)
-  if (shouldRestart !== null) {
-    return { kind: "restarting", reason: shouldRestart }
-  }
-
   const readIdentity = deps.readCloudIdentityImpl
     ?? ((warn: (message: string) => void) => readCloudIdentity(undefined, warn))
   let identity = await readIdentity((message) => deps.warn(`${LOG_PREFIX} ${message}`))
@@ -388,7 +316,6 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     // The flag is explicit intent: force direct mode and ignore a sticky disable.
     identity = { ...identity, mode: "direct", enabled: true }
   }
-  const suppressOpenBrowser = process.env[CLI_SUPPRESS_OPEN_ONCE_ENV_VAR] === "1"
 
   // Single-instance guard: two servers on one data dir mean two JSONL
   // writers — and, when paired, two tunnel connectors load-balancing between
@@ -402,7 +329,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     if (hostedUrl) {
       deps.log(`${LOG_PREFIX} if the hosted URL shows offline, restart the running ${CLI_COMMAND} to pick up the pairing`)
     }
-    if (runOptions.openBrowser && !suppressOpenBrowser) {
+    if (runOptions.openBrowser) {
       deps.openUrl(hostedUrl ?? existing.localUrl)
     }
     return { kind: "exited", code: 0 }
@@ -425,14 +352,6 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     trustProxy: runOptions.trustProxy || isShareEnabled(runOptions.share) || cloudRuntime !== null,
     cloud: cloudRuntime,
     onMigrationProgress: deps.log,
-    update: {
-      version: deps.version,
-      fetchLatestVersion: deps.fetchLatestVersion,
-      installVersion: deps.installVersion,
-      installNightly: deps.installNightly,
-      argv,
-      command: CLI_COMMAND,
-    },
   })
   const { port, stop } = started
   const bindHost = runOptions.host
@@ -474,7 +393,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     // Paired machines open the hosted URL — the one that works from every
     // device — once the tunnel is actually serving (opening it earlier would
     // land on the offline page).
-    const openHostedOnConnect = runOptions.openBrowser && !suppressOpenBrowser
+    const openHostedOnConnect = runOptions.openBrowser
     let openedHosted = false
     runtime.start({
       localUrl: launchUrl,
@@ -492,7 +411,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     deps.log(`${LOG_PREFIX} cloud: waiting for ${runtime.identity.appOrigin} to come online… (disable with \`${CLI_COMMAND} pair --disable\`)`)
   }
 
-  if (runOptions.openBrowser && !isShareEnabled(runOptions.share) && !suppressOpenBrowser && !cloudRuntime) {
+  if (runOptions.openBrowser && !isShareEnabled(runOptions.share) && !cloudRuntime) {
     deps.openUrl(launchUrl)
   }
 
@@ -530,58 +449,4 @@ export async function fetchLatestPackageVersion(packageName: string) {
   }
 
   return payload.version
-}
-
-export function classifyInstallVersionFailure(output: string): UpdateInstallAttemptResult {
-  const normalizedOutput = output.trim()
-  if (/No version matching .* found|failed to resolve/i.test(normalizedOutput)) {
-    return {
-      ok: false,
-      errorCode: "version_not_live_yet",
-      userTitle: "Update not live yet",
-      userMessage: "This update is still propagating. Try again in a few minutes.",
-    }
-  }
-
-  return {
-    ok: false,
-    errorCode: "install_failed",
-    userTitle: "Update failed",
-    userMessage: "Kanna could not install the update. Try again later.",
-  }
-}
-
-export function installPackageVersion(packageName: string, version: string) {
-  if (!hasCommand("bun")) {
-    return {
-      ok: false,
-      errorCode: "command_missing",
-      userTitle: "Bun not found",
-      userMessage: "Kanna could not find Bun to install the update.",
-    } satisfies UpdateInstallAttemptResult
-  }
-
-  // A corrupt global manifest (see repairBunGlobalManifest) makes every
-  // global install fail with a DependencyLoop error — heal it first so
-  // machines that hit 0.57.0's nightly bug can still auto-update.
-  repairBunGlobalManifest()
-
-  const result = spawnSync("bun", ["install", "-g", `${packageName}@${version}`], {
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-  })
-  const stdout = result.stdout ?? ""
-  const stderr = result.stderr ?? ""
-  if (stdout) process.stdout.write(stdout)
-  if (stderr) process.stderr.write(stderr)
-  if (result.status === 0) {
-    return {
-      ok: true,
-      errorCode: null,
-      userTitle: null,
-      userMessage: null,
-    } satisfies UpdateInstallAttemptResult
-  }
-
-  return classifyInstallVersionFailure(`${stdout}\n${stderr}`)
 }

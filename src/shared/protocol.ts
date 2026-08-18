@@ -14,7 +14,6 @@ import type {
   ModelOptions,
   SelectedBranch,
   SidebarData,
-  UpdateSnapshot,
   UsageLimitsSnapshot,
   EditorPreset,
 } from "./types"
@@ -45,7 +44,6 @@ export interface ProjectQuickAction {
 export type SubscriptionTopic =
   | { type: "sidebar" }
   | { type: "local-projects" }
-  | { type: "update" }
   | { type: "keybindings" }
   | { type: "app-settings" }
   | { type: "usage-limits" }
@@ -108,10 +106,6 @@ export type ClientCommand =
   | { type: "browser.killLocalHttpServer"; port: number }
   | { type: "project.readQuickActions"; projectId: string }
   | { type: "project.writeQuickActions"; projectId: string; quickActions: ProjectQuickAction[] }
-  | { type: "update.check"; force?: boolean }
-  | { type: "update.install" }
-  | { type: "update.installNightly" }
-  | { type: "update.installStable" }
   | { type: "settings.readKeybindings" }
   | { type: "settings.writeKeybindings"; bindings: KeybindingsSnapshot["bindings"] }
   | { type: "settings.readAppSettings" }
@@ -288,7 +282,6 @@ export type ClientEnvelope =
 export type ServerSnapshot =
   | { type: "sidebar"; data: SidebarData }
   | { type: "local-projects"; data: LocalProjectsSnapshot }
-  | { type: "update"; data: UpdateSnapshot }
   | { type: "keybindings"; data: KeybindingsSnapshot }
   | { type: "app-settings"; data: AppSettingsSnapshot }
   | { type: "usage-limits"; data: UsageLimitsSnapshot }

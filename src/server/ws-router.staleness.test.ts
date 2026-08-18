@@ -374,7 +374,6 @@ function createWorld(options?: { projectPath?: string }) {
     refreshDiscovery: async () => [],
     getDiscoveredProjects: () => [],
     machineDisplayName: "Staleness Machine",
-    updateManager: null,
   })
 
   void options

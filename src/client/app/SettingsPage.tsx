@@ -273,14 +273,6 @@ export function SettingsPage() {
                     <div className="text-lg font-semibold tracking-[-0.2px] text-foreground">
                       {selectedSection.label}
                     </div>
-                    {selectedPage === "general" ? (
-                      <SettingsHeaderButton
-                        variant="outline"
-                        onClick={() => navigate("/settings/changelog")}
-                      >
-                        Check for updates
-                      </SettingsHeaderButton>
-                    ) : null}
                     {selectedPage === "keybindings" ? (
                       <SettingsHeaderButton
                         onClick={() => {
@@ -298,7 +290,7 @@ export function SettingsPage() {
                 </div>
 
                 {selectedPage === "general" ? (
-                  <GeneralSection state={state} appVersion={appVersion} />
+                  <GeneralSection state={state} />
                 ) : selectedPage === "providers" ? (
                   <ProvidersSection state={state} />
                 ) : selectedPage === "keybindings" ? (
@@ -308,21 +300,14 @@ export function SettingsPage() {
                 ) : selectedPage === "usage" ? (
                   <UsageSection state={state} />
                 ) : selectedPage === "labs" ? (
-                  <LabsSection state={state} appVersion={appVersion} />
+                  <LabsSection state={state} />
                 ) : (
                   <ChangelogSection
                     status={changelog.status}
                     releases={changelog.releases}
                     error={changelog.error}
                     onRetry={changelog.retry}
-                    updateSnapshot={state.updateSnapshot}
                     currentVersion={appVersion}
-                    onInstallUpdate={() => {
-                      void state.handleInstallUpdate()
-                    }}
-                    onCheckForUpdates={() => {
-                      void state.handleCheckForUpdates({ force: true })
-                    }}
                   />
                 )}
               </div>

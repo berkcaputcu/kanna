@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
-import type { AppSettingsSnapshot, KeybindingsSnapshot, LlmProviderSnapshot, UpdateSnapshot } from "../shared/types"
+import type { AppSettingsSnapshot, KeybindingsSnapshot, LlmProviderSnapshot } from "../shared/types"
 import { PROTOCOL_VERSION } from "../shared/types"
 import { createEmptyState } from "./events"
 import {
@@ -266,17 +266,6 @@ describe("skills helpers", () => {
   })
 })
 
-const DEFAULT_UPDATE_SNAPSHOT: UpdateSnapshot = {
-  currentVersion: "0.12.0",
-  latestVersion: null,
-  status: "idle",
-  updateAvailable: false,
-  lastCheckedAt: null,
-  error: null,
-  installAction: "restart",
-  reloadRequestedAt: null,
-}
-
 const DEFAULT_LLM_PROVIDER_SNAPSHOT: LlmProviderSnapshot = {
   provider: "openai",
   apiKey: "",
@@ -379,7 +368,6 @@ function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
     refreshDiscovery: async () => [],
     getDiscoveredProjects: () => [],
     machineDisplayName: "Local Machine",
-    updateManager: null,
     ...overrides,
   })
 }
@@ -1768,116 +1756,6 @@ describe("ws-router", () => {
         },
         warning: null,
         filePathDisplay: "~/.kanna/keybindings.json",
-      },
-    })
-  })
-
-  test("subscribes to update snapshots and handles update.check commands", async () => {
-    const updateManager = {
-      snapshot: { ...DEFAULT_UPDATE_SNAPSHOT },
-      getSnapshot() {
-        return this.snapshot
-      },
-      onChange: () => () => {},
-      async checkForUpdates({ force }: { force?: boolean }) {
-        this.snapshot = {
-          ...this.snapshot,
-          latestVersion: force ? "0.13.0" : "0.12.1",
-          status: "available",
-          updateAvailable: true,
-          lastCheckedAt: 123,
-        }
-        return this.snapshot
-      },
-      async installUpdate() {
-        return {
-          ok: false,
-          action: "restart",
-          errorCode: "version_not_live_yet",
-          userTitle: "Update not live yet",
-          userMessage: "This update is still propagating. Try again in a few minutes.",
-        }
-      },
-    }
-
-    const router = createTestRouter({
-      updateManager: updateManager as never,
-    })
-    const ws = new FakeWebSocket()
-
-    await router.handleMessage(
-      ws as never,
-      JSON.stringify({
-        v: 1,
-        type: "subscribe",
-        id: "update-sub-1",
-        topic: { type: "update" },
-      })
-    )
-
-    expect(ws.sent[0]).toEqual({
-      v: PROTOCOL_VERSION,
-      type: "snapshot",
-      id: "update-sub-1",
-      snapshot: {
-        type: "update",
-        data: DEFAULT_UPDATE_SNAPSHOT,
-      },
-    })
-
-    await router.handleMessage(
-      ws as never,
-      JSON.stringify({
-        v: 1,
-        type: "command",
-        id: "update-check-1",
-        command: {
-          type: "update.check",
-          force: true,
-        },
-      })
-    )
-
-    await Promise.resolve()
-    expect(ws.sent[1]).toEqual({
-      v: PROTOCOL_VERSION,
-      type: "ack",
-      id: "update-check-1",
-      result: {
-        currentVersion: "0.12.0",
-        latestVersion: "0.13.0",
-        status: "available",
-        updateAvailable: true,
-        lastCheckedAt: 123,
-        error: null,
-        installAction: "restart",
-        reloadRequestedAt: null,
-      },
-    })
-
-    await router.handleMessage(
-      ws as never,
-      JSON.stringify({
-        v: 1,
-        type: "command",
-        id: "update-install-1",
-        command: {
-          type: "update.install",
-        },
-      })
-    )
-
-    await Promise.resolve()
-    expect(ws.sent[2]).toEqual({
-      v: PROTOCOL_VERSION,
-      type: "ack",
-      id: "update-install-1",
-      result: {
-        ok: false,
-        action: "restart",
-        errorCode: "version_not_live_yet",
-        userTitle: "Update not live yet",
-        userMessage: "This update is still propagating. Try again in a few minutes.",
       },
     })
   })
