@@ -183,6 +183,7 @@ interface Props {
    */
   projectRepoLabel?: string | null
   inputElementRef?: React.Ref<HTMLTextAreaElement>
+  keyboardInset?: number
   activeProvider: AgentProvider | null
   availableProviders: ProviderCatalogEntry[]
   contextWindowSnapshot?: ContextWindowSnapshot | null
@@ -207,6 +208,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   projectPath,
   projectRepoLabel,
   inputElementRef,
+  keyboardInset = 0,
   activeProvider,
   availableProviders,
   contextWindowSnapshot = null,
@@ -985,87 +987,89 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
         controlsScrollSpacer), so the net gutter is unchanged but content can
         scroll under the edge.
       */}
-      <div className={cn("relative py-3 max-w-[840px] mx-auto", isStandalone && "pt-3 pb-5")}>
-        <div className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden flex flex-row">
-          <div className={controlsScrollSpacer} />
-          <label
-            aria-label="Add attachment"
-            className={cn(
-              "relative md:hidden shrink-0 self-center overflow-hidden mr-0.5 cursor-pointer",
-              "flex items-center gap-1.5 px-2 py-1 text-sm rounded-md transition-colors text-muted-foreground [&>svg]:shrink-0 [&>span]:whitespace-nowrap hover:bg-muted/50",
-              disabled && "pointer-events-none opacity-70",
-            )}
-          >
-            <Paperclip className="h-3.5 w-3.5" />
-            <span>Attach</span>
-            <input
-              type="file"
-              multiple
-              disabled={disabled}
+      {keyboardInset === 0 ? (
+        <div className={cn("relative py-3 max-w-[840px] mx-auto", isStandalone && "pt-3 pb-5")}>
+          <div className="overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden flex flex-row">
+            <div className={controlsScrollSpacer} />
+            <label
               aria-label="Add attachment"
-              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-              onChange={(event) => {
-                const files = [...(event.target.files ?? [])]
-                if (files.length > 0) {
-                  enqueueFiles(files)
+              className={cn(
+                "relative md:hidden shrink-0 self-center overflow-hidden mr-0.5 cursor-pointer",
+                "flex items-center gap-1.5 px-2 py-1 text-sm rounded-md transition-colors text-muted-foreground [&>svg]:shrink-0 [&>span]:whitespace-nowrap hover:bg-muted/50",
+                disabled && "pointer-events-none opacity-70",
+              )}
+            >
+              <Paperclip className="h-3.5 w-3.5" />
+              <span>Attach</span>
+              <input
+                type="file"
+                multiple
+                disabled={disabled}
+                aria-label="Add attachment"
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                onChange={(event) => {
+                  const files = [...(event.target.files ?? [])]
+                  if (files.length > 0) {
+                    enqueueFiles(files)
+                  }
+                  event.target.value = ""
+                }}
+              />
+            </label>
+            <ChatPreferenceControls
+              availableProviders={availableProviders}
+              selectedProvider={selectedProvider}
+              providerSwitchPending={providerSwitchPending}
+              model={providerPrefs.model}
+              modelOptions={providerPrefs.modelOptions}
+              onProviderChange={(provider) => {
+                if (provider !== selectedProvider && unauthenticatedHarnesses.has(provider)) {
+                  setPendingSignInProvider(provider)
+                  return
                 }
-                event.target.value = ""
+                composer.selectProvider(provider)
               }}
+              onModelChange={(_, model) => {
+                composer.selectModel(model)
+              }}
+              onModelOptionChange={(change) => {
+                switch (change.type) {
+                  case "claudeReasoningEffort":
+                  case "codexReasoningEffort":
+                  case "piReasoningEffort":
+                    composer.setReasoningEffort(change.effort)
+                    break
+                  case "contextWindow":
+                    composer.setContextWindow(change.contextWindow)
+                    break
+                  case "fastMode":
+                    composer.setFastMode(change.fastMode)
+                    break
+                }
+              }}
+              onEditModels={onEditModels}
+              mode={chatModeFromFlags(providerPrefs.planMode, providerPrefs.autoPlan)}
+              onModeChange={setEffectiveMode}
+              includeMode={showModePicker}
+              className="max-w-[840px] mx-auto"
             />
-          </label>
-          <ChatPreferenceControls
-            availableProviders={availableProviders}
-            selectedProvider={selectedProvider}
-            providerSwitchPending={providerSwitchPending}
-            model={providerPrefs.model}
-            modelOptions={providerPrefs.modelOptions}
-            onProviderChange={(provider) => {
-              if (provider !== selectedProvider && unauthenticatedHarnesses.has(provider)) {
-                setPendingSignInProvider(provider)
-                return
-              }
-              composer.selectProvider(provider)
-            }}
-            onModelChange={(_, model) => {
-              composer.selectModel(model)
-            }}
-            onModelOptionChange={(change) => {
-              switch (change.type) {
-                case "claudeReasoningEffort":
-                case "codexReasoningEffort":
-                case "piReasoningEffort":
-                  composer.setReasoningEffort(change.effort)
-                  break
-                case "contextWindow":
-                  composer.setContextWindow(change.contextWindow)
-                  break
-                case "fastMode":
-                  composer.setFastMode(change.fastMode)
-                  break
-              }
-            }}
-            onEditModels={onEditModels}
-            mode={chatModeFromFlags(providerPrefs.planMode, providerPrefs.autoPlan)}
-            onModeChange={setEffectiveMode}
-            includeMode={showModePicker}
-            className="max-w-[840px] mx-auto"
-          />
+            {activeContextWindow || showUsageLimitRings ? (
+              <div className="flex items-center gap-1 md:hidden mx-[13px]">
+                {activeContextWindow ? <ContextWindowMeter usage={activeContextWindow} /> : null}
+                {showUsageLimitRings ? <UsageLimitRings provider={selectedProvider} model={providerPrefs.model} /> : null}
+              </div>
+            ) : null}
+            <div className={controlsScrollSpacer} />
+          </div>
+
           {activeContextWindow || showUsageLimitRings ? (
-            <div className="flex items-center gap-1 md:hidden mx-[13px]">
+            <div className="absolute right-[17px] top-1/2 -translate-y-1/2 hidden md:flex items-center gap-1">
               {activeContextWindow ? <ContextWindowMeter usage={activeContextWindow} /> : null}
               {showUsageLimitRings ? <UsageLimitRings provider={selectedProvider} model={providerPrefs.model} /> : null}
             </div>
           ) : null}
-          <div className={controlsScrollSpacer} />
         </div>
-
-        {activeContextWindow || showUsageLimitRings ? (
-          <div className="absolute right-[17px] top-1/2 -translate-y-1/2 hidden md:flex items-center gap-1">
-            {activeContextWindow ? <ContextWindowMeter usage={activeContextWindow} /> : null}
-            {showUsageLimitRings ? <UsageLimitRings provider={selectedProvider} model={providerPrefs.model} /> : null}
-          </div>
-        ) : null}
-      </div>
+      ) : null}
 
       <AttachmentPreviewModal attachment={selectedAttachment} onOpenChange={(open) => !open && setSelectedAttachmentId(null)} />
       <SignInDialog

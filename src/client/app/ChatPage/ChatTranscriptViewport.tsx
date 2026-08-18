@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react"
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react"
 import {
   MessageScroller,
   MessageScrollerContent,
@@ -18,6 +18,7 @@ import { ContextMenu, ContextMenuTrigger } from "../../components/ui/context-men
 import { OpenExternalContextMenuContent, openContextMenuFromButton } from "../../components/open-external-menu"
 import { TRANSCRIPT_PADDING_BOTTOM_OFFSET } from "../kannaStateHelpers"
 import { useScrollbarGutterVar } from "../../hooks/useScrollbarGutterVar"
+import { getMobileKeyboardScrollDelta } from "../../hooks/useMobileKeyboardInset"
 import { cn } from "../../lib/utils"
 import type { ChatJumpRole } from "../../lib/chat-navigation"
 import { formatPathWithTilde, shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
@@ -184,9 +185,11 @@ interface ChatTranscriptViewportProps {
   activeChatId: string | null
   activeProjectId: string | null
   listRef: React.RefObject<TranscriptScrollHandle | null>
+  keyboardDockRef: React.RefObject<HTMLDivElement | null>
   messages: KannaState["messages"]
   queuedMessages: KannaState["queuedMessages"]
   transcriptPaddingBottom: number
+  keyboardInset: number
   localPath: string | null | undefined
   latestToolIds: KannaState["latestToolIds"]
   isProcessing: boolean
@@ -308,9 +311,11 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   activeChatId,
   activeProjectId,
   listRef,
+  keyboardDockRef,
   messages,
   queuedMessages,
   transcriptPaddingBottom,
+  keyboardInset,
   localPath,
   latestToolIds,
   isProcessing,
@@ -351,12 +356,31 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
   // nothing and this component stays out of the scroll path entirely.
   const visibleRowRangeRef = useRef<VisibleRowRange | null>(null)
   const viewportRef = useRef<HTMLDivElement | null>(null)
+  const previousKeyboardDockTopRef = useRef<number | null>(null)
+  const wasKeyboardActiveRef = useRef(false)
   useScrollbarGutterVar(viewportRef, scrollbarGutterHostRef, "--transcript-scrollbar-w")
   const localLinkMenuTriggerRef = useRef<HTMLSpanElement | null>(null)
   const [toolGroupExpanded, setToolGroupExpanded] = useState<Record<string, boolean>>({})
   const [localLinkMenuTarget, setLocalLinkMenuTarget] = useState<OpenLocalLinkTarget | null>(null)
   const [localFilePreviewTarget, setLocalFilePreviewTarget] = useState<OpenLocalLinkTarget | null>(null)
   const isMac = platform === "darwin"
+
+  useLayoutEffect(() => {
+    const dockTop = keyboardDockRef.current?.getBoundingClientRect().top ?? null
+    const previousDockTop = previousKeyboardDockTopRef.current
+    const wasKeyboardActive = wasKeyboardActiveRef.current
+    const isKeyboardActive = keyboardInset > 0
+    previousKeyboardDockTopRef.current = dockTop
+    wasKeyboardActiveRef.current = isKeyboardActive
+
+    if (previousDockTop === null || dockTop === null || (!isKeyboardActive && !wasKeyboardActive)) return
+
+    const delta = getMobileKeyboardScrollDelta(previousDockTop, dockTop)
+    if (delta === 0) return
+
+    const viewport = viewportRef.current
+    if (viewport) viewport.scrollTop += delta
+  }, [keyboardDockRef, keyboardInset, transcriptPaddingBottom])
 
   const rawRows = useMemo(() => buildResolvedTranscriptRows(messages, {
     isLoading: isProcessing,

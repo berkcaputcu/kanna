@@ -6,6 +6,7 @@ import type { AgentProvider, ChatSkillsSnapshot } from "../../../shared/types"
 
 interface ChatInputDockProps {
   inputRef: RefObject<HTMLDivElement | null>
+  keyboardInset: number
   onLayoutChange: () => void
   chatInputRef: RefObject<ChatInputHandle | null>
   chatInputElementRef: RefObject<HTMLTextAreaElement | null>
@@ -28,6 +29,7 @@ interface ChatInputDockProps {
 
 export const ChatInputDock = memo(function ChatInputDock({
   inputRef,
+  keyboardInset,
   onLayoutChange,
   chatInputRef,
   chatInputElementRef,
@@ -48,7 +50,10 @@ export const ChatInputDock = memo(function ChatInputDock({
   onListSkills,
 }: ChatInputDockProps) {
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none">
+    <div
+      className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none"
+      style={{ bottom: keyboardInset }}
+    >
       <div className="relative pointer-events-auto" ref={inputRef}>
         {/* The wash is its own layer, ending at the transcript's scrollbar
             gutter so it stops dimming the scrollbar (which paints below any
@@ -61,6 +66,7 @@ export const ChatInputDock = memo(function ChatInputDock({
           <ChatInput
             ref={chatInputRef}
             inputElementRef={chatInputElementRef}
+            keyboardInset={keyboardInset}
             onLayoutChange={onLayoutChange}
             key={activeChatId ?? "new-chat"}
             onSubmit={onSubmit}
