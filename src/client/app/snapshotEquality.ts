@@ -39,20 +39,13 @@ function sameProviders(left: ProviderCatalogEntry[] | null | undefined, right: P
   if (left === right) return true
   if (!left || !right) return false
   if (left.length !== right.length) return false
+  // Whole entries, not a field list: `foldChatSnapshot` keeps the old object
+  // whenever this says equal, so a field missing here would never reach the
+  // screen. The catalog is a few KB and changes about never; a stringify per
+  // push is cheaper than a stale picker.
   return left.every((provider, index) => {
     const other = right[index]
-    return Boolean(other)
-      && provider.id === other.id
-      && provider.label === other.label
-      && provider.defaultModel === other.defaultModel
-      && provider.models.length === other.models.length
-      && provider.models.every((model, modelIndex) => {
-        const otherModel = other.models[modelIndex]
-        return Boolean(otherModel)
-          && model.id === otherModel.id
-          && model.label === otherModel.label
-          && model.supportsEffort === otherModel.supportsEffort
-      })
+    return Boolean(other) && (provider === other || JSON.stringify(provider) === JSON.stringify(other))
   })
 }
 
@@ -168,16 +161,65 @@ export function applyIncrementalChatSnapshot(
   if (!incoming?.incremental) return incoming
   if (!current) return null
 
+  const incomingEnd = incoming.startIndex + incoming.messages.length
+
+  // A body that starts before the held window and reaches it: older entries
+  // arriving from "load earlier". What it overlaps, it replaces.
+  if (incoming.startIndex < current.startIndex) {
+    if (incomingEnd < current.startIndex) return null
+    const messages = [...incoming.messages, ...current.messages.slice(incomingEnd - current.startIndex)]
+    return assembleFolded(current, incoming, messages, incoming.startIndex)
+  }
+
   const offset = incoming.startIndex - current.startIndex
-  if (offset < 0 || offset > current.messages.length) return null
+  if (offset > current.messages.length) return null
 
   const messages = current.messages.slice(0, offset)
   messages.push(...incoming.messages)
+  return assembleFolded(current, incoming, messages, current.startIndex)
+}
+
+/**
+ * The folded snapshot, keys in the order the server writes them. A folded
+ * state and a fresh full snapshot then serialize the same, which is what the
+ * router's staleness tests compare and what the local cache is keyed on.
+ */
+function assembleFolded(
+  current: Pick<ChatSnapshot, "messages" | "startIndex"> & Partial<Pick<ChatSnapshot, "availableProviders" | "readAnchor" | "outline">>,
+  incoming: ChatSnapshot,
+  messages: TranscriptEntry[],
+  startIndex: number,
+): ChatSnapshot {
+  const carried = carriedFields(current, incoming)
+  const { runtime, queuedMessages, availableProviders, readAnchor, outline, incremental, messages: _m, startIndex: _s, ...rest } = incoming
   return {
-    ...incoming,
+    ...rest,
+    runtime,
+    queuedMessages,
     messages,
-    startIndex: current.startIndex,
+    startIndex,
+    availableProviders: carried.availableProviders ?? availableProviders,
+    readAnchor: carried.readAnchor ?? null,
+    ...("outline" in carried ? { outline: carried.outline } : outline !== undefined ? { outline } : {}),
     incremental: false,
+  }
+}
+
+/**
+ * Fields an incremental body leaves out because they do not change mid-chat:
+ * the server strips them to keep a streamed push to its new entries. The
+ * held snapshot still has them, so they carry forward.
+ */
+function carriedFields(
+  current: Pick<ChatSnapshot, "messages" | "startIndex"> & Partial<Pick<ChatSnapshot, "availableProviders" | "readAnchor" | "outline">>,
+  incoming: ChatSnapshot,
+): Partial<Pick<ChatSnapshot, "availableProviders" | "readAnchor" | "outline">> {
+  return {
+    availableProviders: incoming.availableProviders ?? current.availableProviders,
+    readAnchor: incoming.readAnchor === undefined ? current.readAnchor ?? null : incoming.readAnchor,
+    // Omitted means "same as before"; the server sends it only when a
+    // prompt was added.
+    ...(incoming.outline === undefined && current.outline !== undefined ? { outline: current.outline } : {}),
   }
 }
 
@@ -202,13 +244,34 @@ export function foldChatSnapshot(
   base: Pick<ChatSnapshot, "messages" | "startIndex"> | null,
   incoming: ChatSnapshot | null
 ): ChatSnapshot | null {
-  const next = applyIncrementalChatSnapshot(current ?? base, incoming)
+  let next = applyIncrementalChatSnapshot(current ?? base, incoming)
   if (next === null && incoming?.incremental) {
     // Unplaceable body — keep what is on screen rather than render a transcript
     // with a hole; the next full push repairs it.
     return current
   }
-  return sameChatSnapshotCore(current, next) ? current : next
+  // The outline travels only when it changed; an incremental push without
+  // one means "same as before".
+  if (next && next.outline === undefined && current?.outline) {
+    next = { ...next, outline: current.outline }
+  }
+  if (sameChatSnapshotCore(current, next)) return current
+  if (!current || !next) return next
+  if (!incoming?.incremental && !sameRuntime(current.runtime, next.runtime)) return next
+  // The push changed something, usually the transcript. The parts it did not
+  // change keep their old identity, so consumers keyed on them (the command
+  // palette's action list, the composer's provider picker) do not rebuild on
+  // every push of a streaming turn.
+  return {
+    ...next,
+    runtime: sameRuntime(current.runtime, next.runtime) ? current.runtime : next.runtime,
+    queuedMessages: sameQueuedMessages(current.queuedMessages, next.queuedMessages)
+      ? current.queuedMessages
+      : next.queuedMessages,
+    availableProviders: sameProviders(current.availableProviders, next.availableProviders)
+      ? current.availableProviders
+      : next.availableProviders,
+  }
 }
 
 export function mergeTranscriptEntries(olderHistoryEntries: TranscriptEntry[], recentEntries: TranscriptEntry[]) {

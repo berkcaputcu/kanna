@@ -1,5 +1,5 @@
 import { memo } from "react"
-import { Flower, GitBranch, Globe, Menu, MoreHorizontal, PanelLeft, PanelRight, Search, SquarePen, Terminal } from "lucide-react"
+import { ArrowLeft, Flower, GitBranch, Globe, MoreHorizontal, PanelLeft, PanelRight, Search, SquarePen, Terminal } from "lucide-react"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction } from "../../../shared/protocol"
 import { Button } from "../ui/button"
 import { CardHeader } from "../ui/card"
@@ -142,8 +142,9 @@ function ChatNavbarImpl({
             size="icon"
             className="md:hidden h-[45px] w-[42px] hover:!border-border/0 hover:!bg-transparent"
             onClick={onOpenSidebar}
+            title="Back"
           >
-            <Menu className="size-5" />
+            <ArrowLeft className="size-5" />
           </Button>
           {sidebarCollapsed && (
             <>

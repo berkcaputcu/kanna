@@ -26,6 +26,7 @@ import type {
   LlmProviderSnapshot,
   LlmProviderValidationResult,
   UsageLimitsSnapshot,
+  ChatPreview,
 } from "../shared/types"
 
 
@@ -38,16 +39,6 @@ const MAX_TOOL_ENTRY_REQUEST = 256
 /** Coalescing window for transcript pushes — roughly one animation frame. */
 const CHAT_BROADCAST_INTERVAL_MS = 16
 
-/**
- * Coalescing window for sidebar pushes driven by a running turn.
- *
- * Far slower than the transcript's because the sidebar shows titles, status
- * glyphs and relative ages — none of which a reader can follow at frame rate,
- * and all of which cost a full re-derive plus a whole-snapshot re-render to
- * deliver. See `armPendingSidebarTimer`.
- */
-const SIDEBAR_BROADCAST_INTERVAL_MS = 400
-
 export interface ClientState {
   subscriptions: Map<string, SubscriptionTopic>
   snapshotSignatures: Map<string, string>
@@ -58,6 +49,18 @@ export interface ClientState {
    * span and therefore gets a full window.
    */
   chatEntrySpans?: Map<string, { start: number; end: number }>
+  /**
+   * Absolute index each chat subscription's window starts at. Set on
+   * subscribe from the transcript-window setting, moved back by
+   * `chat.loadOlder`, never forward. See shared/transcript-window.ts.
+   */
+  chatWindowStarts?: Map<string, number>
+  /**
+   * Outline length last sent per chat subscription. The outline rides only
+   * on pushes where it changed, so this is what "changed" is measured
+   * against.
+   */
+  chatOutlineCounts?: Map<string, number>
   protectedDraftChatIds?: Set<string>
 }
 
@@ -121,9 +124,20 @@ interface SnapshotComputationCache {
   chat?: Map<string, ChatSnapshot | null>
 }
 
+/**
+ * Frames at least this long are sent with per-message deflate when the
+ * socket negotiated it. Below it (acks, pings, keystrokes) the deflate
+ * header costs more than it saves and adds latency to typing.
+ */
+const COMPRESS_FRAME_MIN_BYTES = 1024
+
+function sendFrame(ws: ServerWebSocket<ClientState>, payload: string) {
+  ws.send(payload, payload.length >= COMPRESS_FRAME_MIN_BYTES)
+}
+
 function send(ws: ServerWebSocket<ClientState>, message: ServerEnvelope) {
   const payload = JSON.stringify(message)
-  ws.send(payload)
+  sendFrame(ws, payload)
   return payload.length
 }
 
@@ -132,7 +146,7 @@ function send(ws: ServerWebSocket<ClientState>, message: ServerEnvelope) {
  * so N subscribers cost one JSON.stringify instead of N.
  */
 function sendSerializedSnapshot(ws: ServerWebSocket<ClientState>, id: string, snapshotJson: string) {
-  ws.send(`{"v":${PROTOCOL_VERSION},"type":"snapshot","id":${JSON.stringify(id)},"snapshot":${snapshotJson}}`)
+  sendFrame(ws, `{"v":${PROTOCOL_VERSION},"type":"snapshot","id":${JSON.stringify(id)},"snapshot":${snapshotJson}}`)
 }
 
 function ensureChatEntrySpans(ws: ServerWebSocket<ClientState>) {
@@ -170,7 +184,6 @@ export function createWsRouter({
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | null = null
   let pendingBroadcastAll = false
   const pendingBroadcastChatIds = new Set<string>()
-  let pendingSidebarTimer: ReturnType<typeof setTimeout> | null = null
   function getProtectedChatIds() {
     const activeStatuses = agent.getActiveStatuses()
     const drainingChatIds = typeof agent.getDrainingChatIds === "function"
@@ -263,21 +276,57 @@ export function createWsRouter({
     return true
   }
 
+  /**
+   * Bumped whenever the worktree probe reports a change. With the store's
+   * own `stateVersion` and the agent's small status maps, it names every
+   * input the sidebar derive reads, so the memo below is exact.
+   */
+  let sidebarInputsVersion = 0
+  let sidebarMemo: { key: string; entry: { data: ReturnType<typeof deriveSidebarData>; signature: string } } | null = null
+
+  /**
+   * How often a sidebar that nothing else touched is re-derived, for the
+   * time-based buckets ("recent" rows). Coarser than the 15 s activity
+   * quantization on purpose: a row crossing the recent boundary a minute
+   * late is invisible; re-deriving 600 rows per push was not.
+   */
+  const SIDEBAR_CLOCK_BUCKET_MS = 60_000
+
   function getSidebarSnapshotCacheEntry(cache?: SnapshotComputationCache) {
     if (cache?.sidebar) {
       return cache.sidebar
     }
 
     const activeStatuses = agent.getActiveStatuses()
+    const drainingChatIds = agent.getDrainingChatIds()
     const pendingToolKinds = new Map<string, string>()
     for (const [chatId, status] of activeStatuses) {
       if (status !== "waiting_for_user") continue
       const pendingTool = agent.getPendingTool(chatId)
       if (pendingTool) pendingToolKinds.set(chatId, pendingTool.toolKind)
     }
+    // Every input to the derive, in one string. A streaming turn bumps
+    // `stateVersion` per appended entry, so this still re-derives per entry;
+    // what it stops is the derive-and-stringify for broadcasts that changed
+    // nothing sidebar-visible (terminal, git, settings, read anchors).
+    const memoKey = [
+      store.stateVersion,
+      sidebarInputsVersion,
+      Math.floor(Date.now() / SIDEBAR_CLOCK_BUCKET_MS),
+      JSON.stringify([...activeStatuses].sort()),
+      JSON.stringify([...drainingChatIds].sort()),
+      JSON.stringify([...pendingToolKinds].sort()),
+    ].join("|")
+    // A store without a version (the router tests' stubs mutate state
+    // directly) gets no memo rather than a stale sidebar.
+    const canMemo = typeof store.stateVersion === "number"
+    if (canMemo && sidebarMemo?.key === memoKey) {
+      if (cache) cache.sidebar = sidebarMemo.entry
+      return sidebarMemo.entry
+    }
     const data = deriveSidebarData(store.state, activeStatuses, {
       sidebarProjectOrder: store.getSidebarProjectOrder(),
-      drainingChatIds: agent.getDrainingChatIds(),
+      drainingChatIds,
       pendingToolKinds,
       workingTrees: worktreeProbe.getStates(),
       repoLabels: worktreeProbe.getRepoLabels(),
@@ -291,6 +340,7 @@ export function createWsRouter({
         data,
       }),
     }
+    if (canMemo) sidebarMemo = { key: memoKey, entry: sidebar }
 
     if (cache) {
       cache.sidebar = sidebar
@@ -426,6 +476,23 @@ export function createWsRouter({
     }
   }
 
+  /**
+   * The earliest transcript index any socket holds for a chat. The derive
+   * clones from here instead of from zero: a push used to clone the whole
+   * chat and then cut it down per socket, which grew with the chat.
+   */
+  function getEarliestChatWindowStart(chatId: string) {
+    let earliest: number | null = null
+    for (const ws of sockets) {
+      for (const [id, topic] of ws.data.subscriptions.entries()) {
+        if (topic.type !== "chat" || topic.chatId !== chatId) continue
+        const start = getChatWindowStart(ws, id, chatId)
+        if (earliest === null || start < earliest) earliest = start
+      }
+    }
+    return earliest ?? 0
+  }
+
   function getChatSnapshotData(chatId: string, cache?: SnapshotComputationCache) {
     const key = chatId
     const existing = cache?.chat?.get(key)
@@ -437,7 +504,7 @@ export function createWsRouter({
       agent.getActiveStatuses(),
       agent.getDrainingChatIds(),
       chatId,
-      (id) => store.getClientTranscript(id)
+      (id) => store.getClientTranscript(id, getEarliestChatWindowStart(id))
     )
     if (cache) {
       (cache.chat ??= new Map()).set(key, data)
@@ -445,17 +512,63 @@ export function createWsRouter({
     return data
   }
 
+  function ensureChatWindowStarts(ws: ServerWebSocket<ClientState>) {
+    if (!ws.data.chatWindowStarts) {
+      ws.data.chatWindowStarts = new Map()
+    }
+    return ws.data.chatWindowStarts
+  }
+
+  function ensureChatOutlineCounts(ws: ServerWebSocket<ClientState>) {
+    if (!ws.data.chatOutlineCounts) {
+      ws.data.chatOutlineCounts = new Map()
+    }
+    return ws.data.chatOutlineCounts
+  }
+
+  function transcriptWindowAssistantMessages() {
+    return appSettings.getSnapshot().transcript.windowAssistantMessages
+  }
+
+  /** The socket's window start for a chat subscription, sizing it on first use. */
+  function getChatWindowStart(ws: ServerWebSocket<ClientState>, subscriptionId: string, chatId: string) {
+    const starts = ensureChatWindowStarts(ws)
+    const existing = starts.get(subscriptionId)
+    if (existing !== undefined) return existing
+    const start = store.getChat(chatId)
+      ? store.getInitialTranscriptWindowStart(chatId, transcriptWindowAssistantMessages())
+      : 0
+    starts.set(subscriptionId, start)
+    return start
+  }
+
+  /** Cut a full-transcript snapshot down to what starts at `windowStart`. */
+  function sliceChatWindow(data: ChatSnapshot, windowStart: number): ChatSnapshot {
+    const offset = Math.max(0, Math.min(windowStart - data.startIndex, data.messages.length))
+    if (offset === 0) return data
+    return { ...data, messages: data.messages.slice(offset), startIndex: data.startIndex + offset }
+  }
+
   /**
    * Narrow a chat snapshot to the entries a socket has not seen.
    *
-   * Only contiguous forward movement qualifies. If the window slid backwards
-   * (a widened read-anchor window) or forwards past the socket's position (a
-   * missed push), the client would end up with a hole it cannot detect, so the
-   * full window is sent instead.
+   * Two shapes qualify. Contiguous forward movement sends the new tail. A
+   * window that grew backwards while its end stayed put (`chat.loadOlder`)
+   * sends the older slice, which the client splices in front. Anything else
+   * (both at once, or a jump past the socket's position after a missed
+   * push) would leave the client with a hole it cannot detect, so the full
+   * window is sent instead.
    */
   function toSocketChatSnapshot(data: ChatSnapshot | null, previous: { start: number; end: number } | undefined) {
     if (!data || !previous) return data
     const end = data.startIndex + data.messages.length
+    if (data.startIndex < previous.start && end === previous.end) {
+      return {
+        ...data,
+        messages: data.messages.slice(0, previous.start - data.startIndex),
+        incremental: true,
+      }
+    }
     const isContiguous = data.startIndex >= previous.start
       && data.startIndex <= previous.end
       && previous.end <= end
@@ -496,6 +609,12 @@ export function createWsRouter({
     store.getClientTranscript(topic.chatId)
     if (store.getEntryIdAt(topic.chatId, span.end - 1) !== span.endEntryId) return
     ensureChatEntrySpans(ws).set(subscriptionId, { start: span.start, end: span.end })
+    // What the client already holds is its window; the server's default
+    // only applies when it reaches further back than the cache does.
+    const defaultStart = getChatWindowStart(ws, subscriptionId, topic.chatId)
+    if (span.start < defaultStart) {
+      ensureChatWindowStarts(ws).set(subscriptionId, span.start)
+    }
   }
 
   async function pushSnapshots(
@@ -533,19 +652,38 @@ export function createWsRouter({
         continue
       }
       if (topic.type === "chat") {
-        const data = getChatSnapshotData(topic.chatId, options?.cache)
+        const full = getChatSnapshotData(topic.chatId, options?.cache)
+        const data = full ? sliceChatWindow(full, getChatWindowStart(ws, id, topic.chatId)) : full
         const spans = ensureChatEntrySpans(ws)
-        const snapshotJson = JSON.stringify({ type: "chat", data: toSocketChatSnapshot(data, spans.get(id)) })
+        const outlineCounts = ensureChatOutlineCounts(ws)
+        let body = toSocketChatSnapshot(data, spans.get(id))
+        // The outline is a few KB and would otherwise ride every streamed
+        // push; an incremental body carries it only when a prompt was added.
+        const outlineCount = data?.outline?.length ?? 0
+        if (body?.incremental) {
+          // Same for the provider catalog and the read anchor: a few KB that
+          // never change mid-chat, and the client latches both from the
+          // first full snapshot (`foldChatSnapshot` carries them forward).
+          const { availableProviders, readAnchor, ...rest } = body
+          body = rest as typeof body
+          if (outlineCounts.get(id) === outlineCount) {
+            const { outline, ...withoutOutline } = body
+            body = withoutOutline as typeof body
+          }
+        }
+        const snapshotJson = JSON.stringify({ type: "chat", data: body })
         if (snapshotSignatures.get(id) === snapshotJson) {
           continue
         }
         snapshotSignatures.set(id, snapshotJson)
-        // Record the full span, not the slice that went out — it is what this
-        // socket now holds, and what the next push measures against.
+        // Record the whole window, not the slice that went out — it is what
+        // this socket now holds, and what the next push measures against.
         if (data) {
           spans.set(id, { start: data.startIndex, end: data.startIndex + data.messages.length })
+          outlineCounts.set(id, outlineCount)
         } else {
           spans.delete(id)
+          outlineCounts.delete(id)
         }
         sendSerializedSnapshot(ws, id, snapshotJson)
         continue
@@ -594,13 +732,16 @@ export function createWsRouter({
       return
     }
     if (chatIds.size > 0) {
-      void broadcastFilteredSnapshots({ chatIds })
+      // The sidebar rides the chat flush. This is safe — not because sidebar
+      // pushes are rare, but because the snapshot is derived at display
+      // granularity (`SIDEBAR_ACTIVITY_RESOLUTION_MS` in read-models.ts), so a
+      // streamed entry that changes nothing visible serializes to the same
+      // bytes and the signature dedupe drops the push before the wire. What
+      // remains are real changes — status flips, the unread dot, a new title —
+      // and those must land at event speed: a 400 ms throttle here once made
+      // every turn ending feel stuck.
+      void broadcastFilteredSnapshots({ includeSidebar: true, chatIds })
     }
-  }
-
-  function flushPendingSidebarBroadcast() {
-    pendingSidebarTimer = null
-    void broadcastFilteredSnapshots({ includeSidebar: true })
   }
 
   function armPendingBroadcastTimer() {
@@ -608,27 +749,6 @@ export function createWsRouter({
       return
     }
     pendingBroadcastTimer = setTimeout(flushPendingBroadcast, CHAT_BROADCAST_INTERVAL_MS)
-  }
-
-  /**
-   * The sidebar rides its own, much slower timer.
-   *
-   * A running turn appends entries several times a second, and each one moves a
-   * sidebar field (`lastAgentMessageAt`, the reply preview, `pendingToolKind`),
-   * so the signature dedupe never catches. Sharing the chat timer meant
-   * re-deriving every project group, re-serializing the whole snapshot, and
-   * re-rendering every sidebar row at the transcript's frame rate. Nothing in
-   * the sidebar is read that fast — it is a list of titles and status glyphs.
-   *
-   * Commands that change sidebar *membership* (create, delete, archive, rename)
-   * still call `broadcastFilteredSnapshots` directly and land immediately; only
-   * the streaming hot path is throttled.
-   */
-  function armPendingSidebarTimer() {
-    if (pendingSidebarTimer) {
-      return
-    }
-    pendingSidebarTimer = setTimeout(flushPendingSidebarBroadcast, SIDEBAR_BROADCAST_INTERVAL_MS)
   }
 
   function scheduleBroadcast() {
@@ -642,7 +762,6 @@ export function createWsRouter({
       pendingBroadcastChatIds.add(chatId)
     }
     armPendingBroadcastTimer()
-    armPendingSidebarTimer()
   }
 
   async function broadcastChatAndSidebar(chatId: string) {
@@ -1202,6 +1321,18 @@ export function createWsRouter({
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
+        case "chat.getPreview": {
+          const chat = store.getChat(command.chatId)
+          const result: ChatPreview = {
+            ...(chat?.lastUserMessagePreview ? { lastUserMessagePreview: chat.lastUserMessagePreview } : {}),
+            ...(chat?.lastAgentMessagePreview ? { lastAgentMessagePreview: chat.lastAgentMessagePreview } : {}),
+            ...(chat?.lastAgentMessagePreviewAt != null
+              ? { lastAgentMessagePreviewAt: chat.lastAgentMessagePreviewAt }
+              : {}),
+          }
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
         case "chat.getEntryDebugRaw": {
           const result = store.getEntryDebugRaw(command.chatId, command.entryId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
@@ -1215,6 +1346,29 @@ export function createWsRouter({
           }
           const result = store.getEntriesById(command.chatId, command.entryIds)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
+        case "chat.loadOlder": {
+          // Per socket: only this socket's subscriptions on the chat widen,
+          // and each gets the older slice pushed to it alone.
+          if (!store.getChat(command.chatId)) {
+            throw new Error("Chat not found")
+          }
+          const starts = ensureChatWindowStarts(ws)
+          let startIndex = 0
+          for (const [subscriptionId, topic] of ws.data.subscriptions.entries()) {
+            if (topic.type !== "chat" || topic.chatId !== command.chatId) continue
+            const current = getChatWindowStart(ws, subscriptionId, command.chatId)
+            const next = store.widenTranscriptWindowStart(command.chatId, current, {
+              assistantMessages: transcriptWindowAssistantMessages(),
+              ...(command.untilMessageId !== undefined ? { untilMessageId: command.untilMessageId } : {}),
+              ...(command.all ? { all: true } : {}),
+            })
+            starts.set(subscriptionId, next)
+            startIndex = next
+            await pushSnapshots(ws, { skipPrune: true, onlySubscriptionId: subscriptionId })
+          }
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: { startIndex } })
           return
         }
         case "chat.setDraftProtection": {
@@ -1456,6 +1610,11 @@ export function createWsRouter({
           pushTerminalSnapshot(command.terminalId, { force: true })
           return
         }
+        case "terminal.tail": {
+          const result = terminals.getTail(command.terminalId, command.sinceVersion)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
       }
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error)
@@ -1477,7 +1636,12 @@ export function createWsRouter({
     },
     broadcastSnapshots,
     broadcastChatStateImmediately,
-    broadcastSidebar: () => broadcastFilteredSnapshots({ includeSidebar: true }),
+    broadcastSidebar: () => {
+      // Called by the worktree probe and the prune sweep, whose inputs the
+      // store version does not see; the bump invalidates the sidebar memo.
+      sidebarInputsVersion += 1
+      return broadcastFilteredSnapshots({ includeSidebar: true })
+    },
     scheduleBroadcast,
     scheduleChatStateBroadcast,
     pruneStaleEmptyChats: () => maybePruneStaleEmptyChats(),
@@ -1503,6 +1667,8 @@ export function createWsRouter({
         snapshotSignatures.delete(parsed.id)
         // A (re)subscribe starts from nothing, so the next push sends a full window.
         ws.data.chatEntrySpans?.delete(parsed.id)
+        ws.data.chatWindowStarts?.delete(parsed.id)
+        ws.data.chatOutlineCounts?.delete(parsed.id)
         seedChatEntrySpanFromClient(ws, parsed.id, parsed.topic)
         if (parsed.topic.type === "local-projects") {
           void refreshDiscovery().then(() => {
@@ -1537,6 +1703,8 @@ export function createWsRouter({
         snapshotSignatures.delete(parsed.id)
         // A (re)subscribe starts from nothing, so the next push sends a full window.
         ws.data.chatEntrySpans?.delete(parsed.id)
+        ws.data.chatWindowStarts?.delete(parsed.id)
+        ws.data.chatOutlineCounts?.delete(parsed.id)
         send(ws, { v: PROTOCOL_VERSION, type: "ack", id: parsed.id })
         return
       }
@@ -1546,9 +1714,6 @@ export function createWsRouter({
     dispose() {
       if (pendingBroadcastTimer) {
         clearTimeout(pendingBroadcastTimer)
-      }
-      if (pendingSidebarTimer) {
-        clearTimeout(pendingSidebarTimer)
       }
       agent.setBackgroundErrorReporter?.(null)
       disposeTerminalEvents()

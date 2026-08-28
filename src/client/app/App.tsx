@@ -12,7 +12,7 @@ import { useChatSoundPreferencesStore } from "../stores/chatSoundPreferencesStor
 import type { ChatSoundPreference } from "../stores/chatSoundPreferencesStore"
 import { getSetupLaunchAction, useProviderAuthStore } from "../stores/providerAuthStore"
 import { SetupWizard } from "../components/auth/SetupWizard"
-import type { ChatTouchedFilesResult, ProviderAuthSnapshot } from "../../shared/types"
+import type { ChatPreview, ChatTouchedFilesResult, ProviderAuthSnapshot } from "../../shared/types"
 import { playChatNotificationSound, shouldPlayChatSound } from "../lib/chatSounds"
 import { getBrowserWindowTitle, getChatSoundBurstCount } from "./chatNotifications"
 import { KannaSidebar } from "./KannaSidebar"
@@ -245,7 +245,8 @@ function KannaLayout() {
 
   const chatSoundPreference = useChatSoundPreferencesStore((store) => store.chatSoundPreference)
   const chatSoundId = useChatSoundPreferencesStore((store) => store.chatSoundId)
-  const showMobileOpenButton = location.pathname === "/" || location.pathname === "/terminal"
+  // Pages with no header of their own get a floating back button on mobile.
+  const showMobileBackButton = location.pathname === "/home" || location.pathname === "/terminal"
   const appName = state.appSettings?.appName ?? APP_NAME
   // Selected as the finished string rather than derived from the snapshot: the
   // title changes when a chat is renamed or a badge count moves, and this hook
@@ -292,6 +293,9 @@ function KannaLayout() {
   const handleLoadTouchedFiles = useCallback((chatId: string) => (
     state.socket.command<ChatTouchedFilesResult>({ type: "chat.touchedFiles", chatId })
   ), [state.socket])
+  const handleLoadPreview = useCallback((chatId: string) => (
+    state.socket.command<ChatPreview>({ type: "chat.getPreview", chatId })
+  ), [state.socket])
   const handleSidebarSetupGit = useCallback((chatId: string) => {
     void state.handleSetupGit(chatId)
   }, [state.handleSetupGit])
@@ -310,11 +314,8 @@ function KannaLayout() {
       activeChatId={state.activeChatId}
       connectionStatus={state.connectionStatus}
       ready={state.sidebarReady}
-      open={state.sidebarOpen}
       collapsed={state.sidebarCollapsed}
-      showMobileOpenButton={showMobileOpenButton}
-      onOpen={state.openSidebar}
-      onClose={state.closeSidebar}
+      showMobileBackButton={showMobileBackButton}
       onCollapse={state.collapseSidebar}
       onExpand={state.expandSidebar}
       onCreateChat={handleSidebarCreateChat}
@@ -330,6 +331,7 @@ function KannaLayout() {
       onOpenExternalPath={handleSidebarOpenExternalPath}
       onSetupGit={handleSidebarSetupGit}
       onLoadTouchedFiles={handleLoadTouchedFiles}
+      onLoadPreview={handleLoadPreview}
       onRenameProject={handleSidebarRenameProject}
       onHideProject={handleSidebarHideProject}
       onReorderProjectGroups={handleSidebarReorderProjectGroups}
@@ -413,7 +415,11 @@ export function App() {
           {/* Rendered outside the layout: opened as a bare OAuth popup. */}
           <Route path="/oauth/openrouter/callback" element={<OpenRouterCallbackPage />} />
           <Route element={<KannaLayout />}>
-            <Route path="/" element={<LocalProjectsPage />} />
+            {/* On mobile the sidebar fills the screen at `/` (see
+                KannaSidebar), so the projects page hides there and lives at
+                `/home` instead. Desktop shows it at both paths. */}
+            <Route path="/" element={<div className="hidden md:contents"><LocalProjectsPage /></div>} />
+            <Route path="/home" element={<LocalProjectsPage />} />
             <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
             <Route path="/settings/:sectionId" element={<SettingsPage />} />
             <Route path="/chat/:chatId" element={<ChatPage />} />

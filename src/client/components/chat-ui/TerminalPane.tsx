@@ -4,7 +4,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11"
 import { WebglAddon } from "@xterm/addon-webgl"
 import { WebLinksAddon } from "@xterm/addon-web-links"
 import { Terminal, type ITheme, type ITerminalOptions } from "@xterm/xterm"
-import type { TerminalSnapshot } from "../../../shared/protocol"
+import type { TerminalSnapshot, TerminalTailResult } from "../../../shared/protocol"
 import type { KannaSocket, SocketStatus } from "../../app/socket"
 import { useTheme } from "../../hooks/useTheme"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
@@ -272,6 +272,12 @@ function syncTerminalSize(
   hasCreated: boolean,
   sendResize: (cols: number, rows: number) => void
 ) {
+  // A collapsed or parked pane measures as 0x0. Sizing the terminal (and the
+  // PTY behind it) to 2x1 for that reflowed every line into two columns; the
+  // real size arrives with the next resize once the pane is shown.
+  if (container.getBoundingClientRect().height <= 0) {
+    return lastSizeRef.current ?? getTerminalSize(terminal)
+  }
   const nextSize = getMeasuredTerminalSize(terminal, container) ?? getTerminalSize(terminal)
   if (lastSizeRef.current && lastSizeRef.current.cols === nextSize.cols && lastSizeRef.current.rows === nextSize.rows) {
     return nextSize
@@ -282,6 +288,85 @@ function syncTerminalSize(
     sendResize(nextSize.cols, nextSize.rows)
   }
   return nextSize
+}
+
+/**
+ * An xterm instance that outlives the pane that opened it.
+ *
+ * Switching to a chat in another project remounts the terminal panel group,
+ * and a fresh `Terminal` plus WebGL renderer (shader compile, canvas
+ * allocation, glyph atlas) ran 400-600 ms on the main thread per switch. So a
+ * pane parks its terminal here on unmount, DOM node and all, and the next
+ * pane for the same terminal id lifts it back into its container. Only a
+ * closed terminal, a renderer toggle, or the cache cap disposes one.
+ *
+ * `sendInput` is re-pointed on every mount because the key handler and
+ * `onData` are registered once, at creation, and must reach the live pane.
+ */
+interface CachedTerminal {
+  terminal: Terminal
+  host: HTMLDivElement
+  serializeAddon: SerializeAddon
+  webglAddon: WebglAddon | null
+  webglRenderer: boolean
+  mounted: boolean
+  lastUsedAt: number
+  sendInput: (data: string) => void
+}
+
+/** Browsers cap live WebGL contexts around 16; stay well under it. */
+const TERMINAL_CACHE_LIMIT = 8
+
+const terminalCache = new Map<string, CachedTerminal>()
+
+/**
+ * Where a parked terminal's DOM waits, still in the document.
+ *
+ * A host taken out of the document entirely came back frozen: once shown
+ * again the pane parsed output but never painted. Kept in a `display: none`
+ * holder instead, xterm's own visibility observer sees one continuous
+ * hidden-then-shown transition, and the WebGL canvas is never a detached
+ * canvas that the browser may decide to drop.
+ */
+let parkingLot: HTMLDivElement | null = null
+
+function getParkingLot(): HTMLDivElement {
+  if (!parkingLot) {
+    parkingLot = document.createElement("div")
+    parkingLot.style.display = "none"
+    parkingLot.setAttribute("data-kanna-parked-terminals", "")
+    document.body.appendChild(parkingLot)
+  }
+  return parkingLot
+}
+
+function disposeTerminal(cached: CachedTerminal) {
+  // Release the GL context before the terminal goes away; browsers cap the
+  // number of live contexts and won't reclaim it on their own.
+  cached.webglAddon?.dispose()
+  cached.webglAddon = null
+  cached.terminal.dispose()
+  cached.host.remove()
+}
+
+/** Drop a parked terminal for good. Call when its shell is closed. */
+export function disposeCachedTerminal(terminalId: string) {
+  const cached = terminalCache.get(terminalId)
+  if (!cached) return
+  terminalCache.delete(terminalId)
+  disposeTerminal(cached)
+}
+
+function evictParkedTerminals() {
+  if (terminalCache.size <= TERMINAL_CACHE_LIMIT) return
+  const parked = [...terminalCache.entries()]
+    .filter(([, cached]) => !cached.mounted)
+    .sort(([, left], [, right]) => left.lastUsedAt - right.lastUsedAt)
+  for (const [terminalId, cached] of parked) {
+    if (terminalCache.size <= TERMINAL_CACHE_LIMIT) return
+    terminalCache.delete(terminalId)
+    disposeTerminal(cached)
+  }
 }
 
 export function TerminalPane({
@@ -301,6 +386,19 @@ export function TerminalPane({
   // Labs opt-in. Read from the store rather than drilled through the workspace
   // so toggling it only re-mounts the panes.
   const webglRenderer = useTerminalPreferencesStore((store) => store.webglRenderer)
+  // Whether the pane has any height. A collapsed terminal panel keeps its
+  // panes mounted at 0% (reopening returns to the same shell), and a parked
+  // pane sits in a hidden holder, so mounting says nothing about being seen.
+  // Measured by the pane's own ResizeObserver rather than read from the
+  // layout store: the store has to be keyed exactly right for every pane,
+  // and a pane that reads "hidden" for good drops output for good.
+  const visibleRef = useRef(false)
+  /** Output count xterm has been fed up to; what `terminal.tail` resumes from. */
+  const writtenVersionRef = useRef<number | null>(null)
+  /** Events that land while a catch-up is in flight, replayed after it. */
+  const catchUpQueueRef = useRef<Array<{ data: string; version?: number }> | null>(null)
+  /** Resync after the pane is shown. Bound by the session effect, which owns `applySnapshot`. */
+  const catchUpRef = useRef<() => void>(() => {})
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const replayStateRef = useRef<string | null>(null)
@@ -356,33 +454,59 @@ export function TerminalPane({
   }, [initialCommand])
 
   useEffect(() => {
-    const terminal = new Terminal(getTerminalOptions(scrollback, withSurfaceBackground(terminalTheme, containerRef.current)))
-    const serializeAddon = new SerializeAddon()
-    terminal.loadAddon(serializeAddon)
-    terminal.loadAddon(new WebLinksAddon())
-    // Must match the shadow terminal on the server: xterm defaults to Unicode 6
-    // width tables, which measure astral emoji as one cell instead of two. If
-    // the two ends disagree, replayed snapshots land in the wrong columns.
-    terminal.loadAddon(new Unicode11Addon())
-    terminal.unicode.activeVersion = "11"
-    terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type !== "keydown") return true
-
-      const sequence = getMacOptionInputSequence(event)
-      if (!sequence) return true
-
-      event.preventDefault()
-      sendInput(sequence)
-      return false
-    })
-
-    terminalRef.current = terminal
-
     const element = containerRef.current
-    let webglAddon: WebglAddon | null = null
+    const theme = withSurfaceBackground(terminalTheme, element)
 
-    if (element) {
-      terminal.open(element)
+    let cached = terminalCache.get(terminalId) ?? null
+    if (cached && cached.webglRenderer !== webglRenderer) {
+      // The renderer is chosen at creation; a toggle needs a fresh instance.
+      terminalCache.delete(terminalId)
+      disposeTerminal(cached)
+      cached = null
+    }
+
+    if (cached) {
+      cached.terminal.options.theme = theme
+      cached.terminal.options.scrollback = scrollback
+    } else {
+      const terminal = new Terminal(getTerminalOptions(scrollback, theme))
+      const serializeAddon = new SerializeAddon()
+      terminal.loadAddon(serializeAddon)
+      terminal.loadAddon(new WebLinksAddon())
+      // Must match the shadow terminal on the server: xterm defaults to Unicode 6
+      // width tables, which measure astral emoji as one cell instead of two. If
+      // the two ends disagree, replayed snapshots land in the wrong columns.
+      terminal.loadAddon(new Unicode11Addon())
+      terminal.unicode.activeVersion = "11"
+
+      const created: CachedTerminal = {
+        terminal,
+        host: document.createElement("div"),
+        serializeAddon,
+        webglAddon: null,
+        webglRenderer,
+        mounted: false,
+        lastUsedAt: Date.now(),
+        sendInput,
+      }
+      created.host.className = "h-full w-full"
+      terminal.attachCustomKeyEventHandler((event) => {
+        if (event.type !== "keydown") return true
+
+        const sequence = getMacOptionInputSequence(event)
+        if (!sequence) return true
+
+        event.preventDefault()
+        created.sendInput(sequence)
+        return false
+      })
+      terminal.onData((data) => {
+        created.sendInput(data)
+      })
+
+      // xterm opens into the host, never into the pane's own container, so the
+      // host can move between containers as panes come and go.
+      terminal.open(created.host)
       // The WebGL renderer needs a live render service, so it can only be
       // attached after open(). Any failure (no GPU, blocklisted driver, lost
       // context) falls back to xterm's built-in DOM renderer rather than
@@ -392,26 +516,38 @@ export function TerminalPane({
           const addon = new WebglAddon()
           addon.onContextLoss(() => {
             addon.dispose()
-            if (webglAddon === addon) webglAddon = null
+            if (created.webglAddon === addon) created.webglAddon = null
           })
           terminal.loadAddon(addon)
-          webglAddon = addon
+          created.webglAddon = addon
         } catch (webglError) {
           console.warn("Terminal: WebGL renderer unavailable, using the DOM renderer.", webglError)
-          webglAddon = null
+          created.webglAddon = null
         }
       }
       if (replayStateRef.current) {
         terminal.write(replayStateRef.current)
       }
+      terminalCache.set(terminalId, created)
+      cached = created
+      evictParkedTerminals()
+    }
+
+    const live = cached
+    const { terminal, serializeAddon } = live
+    live.sendInput = sendInput
+    live.mounted = true
+    live.lastUsedAt = Date.now()
+    terminalRef.current = terminal
+
+    if (element) {
+      element.appendChild(live.host)
       syncTerminalSize(terminal, element, lastSizeRef, false, () => {})
       refreshTerminal(terminal)
       scheduleResizeSync()
     }
-
-    const dataDisposable = terminal.onData((data) => {
-      sendInput(data)
-    })
+    // Starts hidden: the observer below reports the real size on observe.
+    visibleRef.current = false
 
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
       if (!hasCreatedRef.current) return
@@ -423,10 +559,18 @@ export function TerminalPane({
       sendResize(cols, rows)
     })
 
+    const syncVisibility = (element: HTMLElement) => {
+      const shown = element.getBoundingClientRect().height > 0
+      if (shown === visibleRef.current) return
+      visibleRef.current = shown
+      if (shown) catchUpRef.current()
+    }
+
     const observer = new ResizeObserver(() => {
       const terminalInstance = terminalRef.current
       const element = containerRef.current
       if (!terminalInstance || !element) return
+      syncVisibility(element)
       syncTerminalSize(terminalInstance, element, lastSizeRef, hasCreatedRef.current, (cols, rows) => {
         void socket.command({
           type: "terminal.resize",
@@ -444,13 +588,12 @@ export function TerminalPane({
     return () => {
       observer.disconnect()
       resizeDisposable.dispose()
-      dataDisposable.dispose()
       replayStateRef.current = serializeAddon.serialize()
-      // Release the GL context before the terminal goes away; browsers cap the
-      // number of live contexts and won't reclaim it on their own.
-      webglAddon?.dispose()
-      webglAddon = null
-      terminal.dispose()
+      // Park, do not dispose. Input from a parked terminal has nowhere to go.
+      live.sendInput = () => {}
+      live.mounted = false
+      live.lastUsedAt = Date.now()
+      getParkingLot().appendChild(live.host)
       terminalRef.current = null
     }
   }, [scrollback, socket, terminalId, terminalTheme, webglRenderer])
@@ -505,6 +648,7 @@ export function TerminalPane({
     onPathChange?.(metadata?.cwd ?? null)
   }, [metadata?.cwd, onPathChange])
 
+
   useEffect(() => {
     const applySnapshot = (snapshot: TerminalSnapshot) => {
       const terminal = terminalRef.current
@@ -534,12 +678,58 @@ export function TerminalPane({
       setMetadata((current) => sameTerminalMetadata(current, nextMetadata) ? current : nextMetadata)
       replayStateRef.current = snapshot.serializedState || null
       terminal.options.scrollback = snapshot.scrollback
-      terminal.reset()
-      if (snapshot.serializedState) {
-        terminal.write(snapshot.serializedState)
-      }
-      refreshTerminal(terminal)
+      // `write` is queued and asynchronous; `reset()` is not. A reset issued
+      // here ran before writes already in the queue (a catch-up tail, live
+      // output, the parked buffer) were parsed, so the fresh state landed on
+      // top of them and the screen showed everything twice. RIS (`ESC c`) is
+      // the same full reset, but the parser applies it in order with the
+      // bytes around it, which is the only ordering that holds.
+      terminal.write(`\x1bc${snapshot.serializedState ?? ""}`, () => refreshTerminal(terminal))
+      writtenVersionRef.current = snapshot.outputVersion ?? null
       return true
+    }
+
+    // Runs on every hidden-to-shown transition, not only when output was
+    // seen while hidden: a pane that was parked has no record of what it
+    // missed. A tail of nothing costs one small round trip.
+    catchUpRef.current = () => {
+      const terminal = terminalRef.current
+      if (!terminal || catchUpQueueRef.current) return
+      // Output that lands while the request is out is held, then whatever the
+      // tail already covers is dropped, so nothing is written twice.
+      catchUpQueueRef.current = []
+      void socket.command<TerminalTailResult | null>({
+        type: "terminal.tail",
+        terminalId,
+        sinceVersion: writtenVersionRef.current,
+      }).then((result) => {
+        if (terminalRef.current !== terminal) return
+        if (result?.tail) {
+          // A snapshot pushed while this request was out already painted
+          // past the tail's end; writing it again would show that span twice.
+          const written = writtenVersionRef.current
+          if (written != null && result.tail.version <= written) return
+          if (result.tail.data) terminal.write(result.tail.data)
+          writtenVersionRef.current = result.tail.version
+        } else if (result?.snapshot) {
+          lastAppliedSnapshotKeyRef.current = null
+          applySnapshot(result.snapshot)
+        }
+      }).catch(() => {
+        // The next show, or the next snapshot, tries again.
+      }).finally(() => {
+        const queued = catchUpQueueRef.current ?? []
+        catchUpQueueRef.current = null
+        if (terminalRef.current !== terminal) return
+        for (const event of queued) {
+          const written = writtenVersionRef.current
+          if (event.version != null && written != null && event.version <= written) continue
+          terminal.write(event.data)
+          if (event.version != null) writtenVersionRef.current = event.version
+        }
+        refreshTerminal(terminal)
+        scheduleResizeSync()
+      })
     }
 
     const ensureSession = () => {
@@ -598,7 +788,7 @@ export function TerminalPane({
 
     scheduleSessionCreate()
 
-    return socket.subscribeTerminal(terminalId, {
+    const unsubscribe = socket.subscribeTerminal(terminalId, {
       onSnapshot: (snapshot) => {
         if (!snapshot) {
           hasCreatedRef.current = false
@@ -618,7 +808,16 @@ export function TerminalPane({
         const terminal = terminalRef.current
         if (!terminal) return
         if (event.type === "terminal.output") {
+          // A hidden pane does not parse. xterm would lay out and render
+          // every byte for pixels nobody can see; the server keeps the
+          // buffer, and the pane asks for the gap when it is shown again.
+          if (!visibleRef.current) return
+          if (catchUpQueueRef.current) {
+            catchUpQueueRef.current.push({ data: event.data, version: event.version })
+            return
+          }
           terminal.write(event.data)
+          if (event.version != null) writtenVersionRef.current = event.version
           return
         }
         if (event.type === "terminal.exit") {
@@ -631,6 +830,10 @@ export function TerminalPane({
         }
       },
     })
+    return () => {
+      catchUpRef.current = () => {}
+      unsubscribe()
+    }
   }, [connectionStatus, initialCommand, onInitialCommandSent, projectId, scrollback, socket, terminalId])
 
   return (

@@ -24,6 +24,7 @@ import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
 import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
+import { handleChatWindow } from "./chat-window-route"
 import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
@@ -125,6 +126,12 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   await store.initialize()
   await diffStore.initialize()
   await store.migrateLegacyTranscripts(options.onMigrationProgress)
+  // Not awaited: this streams every transcript once per data dir, which on a
+  // machine with a few 100 MB chats takes longer than a boot should. The
+  // store queues each rewrite behind appends, so serving can start now.
+  void store.slimTranscripts({ onProgress: options.onMigrationProgress }).catch((error) => {
+    console.warn(`${LOG_PREFIX} transcript slim failed:`, error)
+  })
   let discoveredProjects: DiscoveredProject[] = []
 
   async function refreshDiscovery() {
@@ -326,6 +333,18 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       server = Bun.serve<ClientState>({
         port: actualPort,
         hostname,
+        // Bun's default is 10s, which reaps tunneled requests riding out a
+        // Cloudflare edge blip (and coincides exactly with the tunnel
+        // supervisor's self-ping timeout). 60s stays under Cloudflare's
+        // ~100s origin read timeout so the edge gives up first.
+        idleTimeout: 60,
+        // Backstop: a request Bun idle-timed-out can leave its async fetch
+        // handler rejecting later on a dead socket. Without this handler
+        // that rejection escapes and can take the process down.
+        error(err) {
+          console.error(`${LOG_PREFIX} http handler error:`, err)
+          return new Response("Internal server error", { status: 500 })
+        },
         async fetch(req, serverInstance) {
           const url = new URL(req.url)
           const requestClass: CloudRequestClass = cloud
@@ -467,6 +486,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(attachmentContentResponse)
           }
 
+          const transcriptMediaResponse = await handleTranscriptMediaContent(req, url, store)
+          if (transcriptMediaResponse) {
+            return withOriginAgentCluster(transcriptMediaResponse)
+          }
+
           const projectFileContentResponse = await handleProjectFileContent(req, url, store)
           if (projectFileContentResponse) {
             return withOriginAgentCluster(projectFileContentResponse)
@@ -477,9 +501,28 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(localFileContentResponse)
           }
 
+          const chatWindowResponse = await handleChatWindow(req, url, { store, agent, appSettings })
+          if (chatWindowResponse) {
+            return withOriginAgentCluster(chatWindowResponse)
+          }
+
           return withOriginAgentCluster(serveStatic(distDir, url.pathname))
         },
         websocket: {
+          // Negotiated per connection: browsers opt in and get 8-12x smaller
+          // snapshots over the tunnel; the iOS app's URLSession never offers
+          // it and keeps raw frames. The router compresses only frames worth
+          // it (see `send` in ws-router.ts), so localhost pays close to nothing.
+          //
+          // Server-to-client only. With decompression on, in any mode, Safari
+          // never settled the socket while Chrome was fine: Bun cannot inflate
+          // the frames WebKit sends (the handshake was not the problem; the
+          // "dedicated" reply is a bare `permessage-deflate` and Safari still
+          // failed). Client frames are commands and pings, a few hundred
+          // bytes, so nothing is lost by taking them raw. "dedicated" rather
+          // than the shared compressor: one deflate context per socket, a few
+          // hundred KB each, and a reply Safari accepts.
+          perMessageDeflate: { compress: "dedicated", decompress: "disable" },
           open(ws) {
             router.handleOpen(ws)
           },
@@ -671,6 +714,44 @@ async function handleAttachmentContent(req: Request, url: URL, store: EventStore
   return new Response(file, {
     headers: {
       "Content-Type": inferAttachmentContentType(storedName, file.type),
+    },
+  })
+}
+
+/**
+ * Images the store moved out of tool results (`transcript-media.ts`). The
+ * name embeds the entry id and never changes, so the browser may cache it
+ * for as long as it likes.
+ */
+async function handleTranscriptMediaContent(req: Request, url: URL, store: EventStore) {
+  const match = url.pathname.match(/^\/api\/chats\/([^/]+)\/media\/([^/]+)$/)
+  if (!match) {
+    return null
+  }
+
+  if (req.method !== "GET") {
+    return new Response(null, { status: 405, headers: { Allow: "GET" } })
+  }
+
+  const filePath = store.resolveTranscriptMediaPath(url.pathname)
+  if (!filePath) {
+    return Response.json({ error: "Media not found" }, { status: 404 })
+  }
+
+  const file = Bun.file(filePath)
+  try {
+    const info = await stat(filePath)
+    if (!info.isFile()) {
+      return Response.json({ error: "Media not found" }, { status: 404 })
+    }
+  } catch {
+    return Response.json({ error: "Media not found" }, { status: 404 })
+  }
+
+  return new Response(file, {
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+      "Cache-Control": "private, max-age=31536000, immutable",
     },
   })
 }

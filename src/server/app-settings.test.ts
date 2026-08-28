@@ -39,6 +39,9 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
       preset: "cursor",
       commandTemplate: "cursor {path}",
     },
+    transcript: {
+      windowAssistantMessages: 50,
+    },
     defaultProvider: "last_used",
     providerDefaults: {
       claude: {

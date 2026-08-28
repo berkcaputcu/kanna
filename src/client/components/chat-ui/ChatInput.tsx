@@ -17,6 +17,7 @@ import { ScrollArea } from "../ui/scroll-area"
 import { cn } from "../../lib/utils"
 import { useComposer } from "../../hooks/useComposer"
 import { useIsStandalone } from "../../hooks/useIsStandalone"
+import { useShallow } from "zustand/react/shallow"
 import { useChatInputStore } from "../../stores/chatInputStore"
 import { type ComposerState, useChatPreferencesStore } from "../../stores/chatPreferencesStore"
 import { CHAT_INPUT_ATTRIBUTE, focusNextChatInput, REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
@@ -216,6 +217,8 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onEditModels,
   onListSkills,
 }, forwardedRef) {
+  // Actions only. Selecting the whole store re-rendered this component on
+  // every keystroke in any composer, and on every attachment change anywhere.
   const {
     getDraft,
     setDraft,
@@ -223,7 +226,14 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     getAttachmentDrafts,
     setAttachmentDrafts,
     clearAttachmentDrafts,
-  } = useChatInputStore()
+  } = useChatInputStore(useShallow((state) => ({
+    getDraft: state.getDraft,
+    setDraft: state.setDraft,
+    clearDraft: state.clearDraft,
+    getAttachmentDrafts: state.getAttachmentDrafts,
+    setAttachmentDrafts: state.setAttachmentDrafts,
+    clearAttachmentDrafts: state.clearAttachmentDrafts,
+  })))
   const initializeComposerForChat = useChatPreferencesStore((state) => state.initializeComposerForChat)
   // Canonical composer semantics (provider lock, model catalog, plan-mode
   // support) shared with the command palette — see lib/composer.ts.
@@ -367,7 +377,6 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   const uploadedAttachments = attachments.filter((attachment) => attachment.status === "uploaded")
   const hasPendingUploads = attachments.some((attachment) => attachment.status === "uploading")
-  const hasTextToSend = value.trim().length > 0
   const canSubmit = value.trim().length > 0 || uploadedAttachments.length > 0
   const orderedAttachments = [...attachments].sort((left, right) => {
     if (left.kind === right.kind) return 0
@@ -770,7 +779,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     }
 
     const isTouchDevice = "ontouchstart" in window || navigator.maxTouchPoints > 0
-    if (event.key === "Enter" && !event.shiftKey && !isTouchDevice && !disabled && hasTextToSend && !hasPendingUploads) {
+    if (event.key === "Enter" && !event.shiftKey && !isTouchDevice && !disabled && canSubmit && !hasPendingUploads) {
       event.preventDefault()
       void handleSubmit()
     }
@@ -800,7 +809,6 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
       const nextCaretPosition = textarea.selectionStart + trimmedText.length
       setValue(nextValue)
       if (chatId) setDraft(chatId, nextValue)
-      autoResize()
       requestAnimationFrame(() => {
         textarea.selectionStart = nextCaretPosition
         textarea.selectionEnd = nextCaretPosition
@@ -910,7 +918,12 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
             </ScrollArea>
           ) : null}
 
-          <div className="flex items-end max-w-[840px] mx-auto border dark:bg-card/40 backdrop-blur-lg border-border rounded-[29px] pr-1.5">
+          {/*
+            Opaque on purpose. A backdrop blur here re-samples and re-blurs
+            everything under the composer on every transcript repaint, which
+            during a streaming turn is every frame.
+          */}
+          <div className="flex items-end max-w-[840px] mx-auto border bg-background dark:bg-card border-border rounded-[29px] pr-1.5">
             <Textarea
               ref={setTextareaRefs}
               placeholder={placeholder}
@@ -922,7 +935,9 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 setValue(event.target.value)
                 setCaretPosition(event.target.selectionStart ?? event.target.value.length)
                 if (chatId) setDraft(chatId, event.target.value)
-                autoResize()
+                // No autoResize here: the layout effect on `value` runs it once
+                // the DOM has the new text. Calling it here too thrashed layout
+                // twice per keystroke.
               }}
               onSelect={(event) => {
                 setCaretPosition(event.currentTarget.selectionStart ?? 0)
@@ -936,19 +951,20 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               type="button"
               onPointerDown={(event) => {
                 event.preventDefault()
-                if (!disabled && hasTextToSend && !hasPendingUploads) {
+                // Anything sendable (text or attachments alone) wins over
+                // cancel, so a file-only message queues instead of stopping
+                // the running turn.
+                if (!disabled && canSubmit && !hasPendingUploads) {
                   void handleSubmit()
                 } else if (canCancel) {
                   onCancel?.()
-                } else if (!disabled && canSubmit && !hasPendingUploads) {
-                  void handleSubmit()
                 }
               }}
               disabled={disabled || (!canCancel && !canSubmit) || hasPendingUploads}
               size="icon"
               className="flex-shrink-0 bg-slate-600 text-white dark:bg-white dark:text-slate-900 rounded-full cursor-pointer h-10 w-10 md:h-11 md:w-11 mb-1 -mr-0.5 md:mr-0 md:mb-1.5 touch-manipulation disabled:bg-white/60 disabled:text-slate-700"
             >
-              {hasTextToSend ? (
+              {canSubmit ? (
                 <ArrowUp className="h-5 w-5 md:h-6 md:w-6" />
               ) : canCancel ? (
                 <div className="w-3 h-3 md:w-4 md:h-4 rounded-xs bg-current" />

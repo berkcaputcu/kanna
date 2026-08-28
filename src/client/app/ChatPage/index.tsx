@@ -21,6 +21,7 @@ import { useProjectRepoUrl } from "../../stores/sidebarStore"
 import { DEFAULT_PROJECT_TERMINAL_LAYOUT, useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
 import { shouldCloseTerminalPane } from "../terminalLayoutResize"
+import { disposeCachedTerminal } from "../../components/chat-ui/TerminalPane"
 import { TERMINAL_TOGGLE_ANIMATION_DURATION_MS } from "../terminalToggleAnimation"
 import { useRightSidebarToggleAnimation } from "../useRightSidebarToggleAnimation"
 import { useStickyChatFocus } from "../useStickyChatFocus"
@@ -50,6 +51,9 @@ export {
   hasFileDragTypes,
   shouldAutoFollowTranscriptResize,
 } from "./utils"
+
+/** Stable identity so a chat without a snapshot does not re-derive per render. */
+const EMPTY_TRANSCRIPT_ENTRIES: TranscriptEntry[] = []
 
 function useEmptyStateTyping(showEmptyState: boolean, activeChatId: string | null) {
   const [typedEmptyStateText, setTypedEmptyStateText] = useState("")
@@ -529,7 +533,7 @@ export function ChatPage() {
   const resolvedKeybindings = useMemo(() => getResolvedKeybindings(state.keybindings), [state.keybindings])
   const baseContextWindowSnapshotRef = useRef<ReturnType<typeof deriveLatestContextWindowSnapshot>>(null)
   const contextWindowSnapshot = useMemo(() => {
-    const derivedSnapshot = deriveLatestContextWindowSnapshot(state.chatSnapshot?.messages ?? [])
+    const derivedSnapshot = deriveLatestContextWindowSnapshot(state.chatSnapshot?.messages ?? EMPTY_TRANSCRIPT_ENTRIES)
     const previousSnapshot = baseContextWindowSnapshotRef.current
     if (sameContextWindowSnapshot(previousSnapshot, derivedSnapshot)) {
       return previousSnapshot
@@ -774,6 +778,7 @@ export function ChatPage() {
     // A split pane is unreachable once removed, so closing it does kill it.
     void state.socket.command({ type: "terminal.close", terminalId }).catch(() => {})
     removeTerminal(currentProjectId, terminalId)
+    disposeCachedTerminal(terminalId)
   }, [hideTerminals, removeTerminal, state.socket])
 
   const clearShowScrollTimeout = useCallback(() => {
@@ -999,6 +1004,11 @@ export function ChatPage() {
         <TranscriptRenderOptionsProvider value={transcriptRenderOptions}>
         <ToolPayloadProvider store={toolPayloadStore}>
         <ChatTranscriptViewport
+          // Keyed by chat so a switch replaces the whole list in one
+          // `removeChild`. Reusing the list container meant React removed
+          // the old chat's rows one by one: 168 ms of pure DOM removal on
+          // an 800-row chat before the new one could mount.
+          key={state.activeChatId ?? "none"}
           activeChatId={state.activeChatId}
           activeProjectId={state.activeProjectId}
           listRef={transcriptListRef}
@@ -1030,6 +1040,10 @@ export function ChatPage() {
           onReportReadAnchor={state.reportReadAnchor}
           jumpRequest={jumpRequest}
           onJumpRequestHandled={onJumpRequestHandled}
+          hasOlderMessages={state.hasOlderMessages}
+          transcriptOutline={state.transcriptOutline}
+          onLoadOlderMessages={state.loadOlderMessages}
+          isLoadingOlderMessages={state.isLoadingOlderMessages}
           scrollToBottom={scrollToTranscriptEnd}
           typedEmptyStateText={typedEmptyStateText}
           isEmptyStateTypingComplete={isEmptyStateTypingComplete}

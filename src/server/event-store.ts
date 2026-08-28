@@ -1,9 +1,11 @@
-import { appendFile, mkdir, rename, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { existsSync, readFileSync as readFileSyncImmediate } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { getDataDir, LOG_PREFIX } from "../shared/branding"
 import { toMessagePreview } from "../shared/message-preview"
+import { buildTranscriptOutline, findTranscriptWindowStart } from "../shared/transcript-window"
+import type { TranscriptOutlineEntry } from "../shared/types"
 import type { AgentProvider, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
 import { STORE_VERSION } from "../shared/types"
 import {
@@ -20,6 +22,23 @@ import {
   createEmptyState,
 } from "./events"
 import { resolveLocalPath } from "./paths"
+import { slimTranscriptFile } from "./transcript-slim"
+import {
+  mergeTranscriptPayload,
+  readAllTranscriptPayloads,
+  serializeTranscriptPayload,
+  splitTranscriptEntry,
+  TranscriptPayloadIndex,
+} from "./transcript-payloads"
+import { INLINE_TOOL_KINDS } from "./events"
+import {
+  copyTranscriptMedia,
+  externalizeEntryImages,
+  getTranscriptMediaDir,
+  parseTranscriptMediaUrl,
+  removeTranscriptMedia,
+  retargetEntryMediaUrls,
+} from "./transcript-media"
 
 const COMPACTION_THRESHOLD_BYTES = 2 * 1024 * 1024
 const STALE_EMPTY_CHAT_MAX_AGE_MS = 5 * 60 * 1000
@@ -208,6 +227,16 @@ function getReplayEventPriority(event: StoreEvent) {
   }
 }
 
+/**
+ * Bump when the slim sweep learns a new rewrite, so data dirs swept by an
+ * older build get the new pass on their next boot.
+ */
+const SLIM_SWEEP_VERSION = 3
+
+function formatMegabytes(bytes: number) {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function getForkedChatTitle(title: string) {
   const trimmed = title.trim()
   if (!trimmed) return "Fork: New Chat"
@@ -226,6 +255,8 @@ export class EventStore {
   private readonly queuedMessagesLogPath: string
   private readonly turnsLogPath: string
   private readonly transcriptsDir: string
+  /** Written once `slimTranscripts` has swept this data dir. */
+  private readonly slimMarkerPath: string
   private readonly sidebarProjectOrderPath: string
   private legacyMessagesByChatId = new Map<string, TranscriptEntry[]>()
   private legacySidebarProjectOrder: string[] = []
@@ -236,6 +267,11 @@ export class EventStore {
   // chat, forcing a synchronous full-file re-read on its next event.
   private readonly transcriptCache = new Map<string, TranscriptEntry[]>()
   private static readonly TRANSCRIPT_CACHE_LIMIT = 8
+  /**
+   * Offsets into each chat's payload sidecar (`transcript-payloads.ts`).
+   * Built on first payload read, evicted with the transcript cache.
+   */
+  private readonly payloadIndexes = new Map<string, TranscriptPayloadIndex>()
   /**
    * Fired after a turn reaches a terminal state — the same three events that
    * set `lastTurnEndedAt`. Deliberately distinct from `Agent.onStateChange`,
@@ -257,6 +293,7 @@ export class EventStore {
     this.queuedMessagesLogPath = path.join(this.dataDir, "queued-messages.jsonl")
     this.turnsLogPath = path.join(this.dataDir, "turns.jsonl")
     this.transcriptsDir = path.join(this.dataDir, "transcripts")
+    this.slimMarkerPath = path.join(this.dataDir, "transcripts-slim.json")
     this.sidebarProjectOrderPath = path.join(this.dataDir, SIDEBAR_PROJECT_ORDER_FILE)
   }
 
@@ -419,6 +456,7 @@ export class EventStore {
   }
 
   private resetState() {
+    this.stateVersion += 1
     this.state.projectsById.clear()
     this.state.projectIdsByPath.clear()
     this.state.chatsById.clear()
@@ -426,6 +464,7 @@ export class EventStore {
     this.sidebarProjectOrder = []
     this.legacySidebarProjectOrder = []
     this.transcriptCache.clear()
+    this.payloadIndexes.clear()
   }
 
   private clearLegacyTranscriptState() {
@@ -584,7 +623,15 @@ export class EventStore {
     return parsedEvents
   }
 
+  /**
+   * Bumped on every change that can move a sidebar row: applied events,
+   * transcript metadata, project order, a reset. Read models memoize on it,
+   * so a broadcast that changed nothing here skips the derive entirely.
+   */
+  stateVersion = 0
+
   private applyEvent(event: StoreEvent) {
+    this.stateVersion += 1
     switch (event.type) {
       case "project_opened": {
         const localPath = resolveLocalPath(event.localPath)
@@ -832,6 +879,7 @@ export class EventStore {
   }
 
   private applyMessageMetadata(chatId: string, entry: TranscriptEntry) {
+    this.stateVersion += 1
     const chat = this.state.chatsById.get(chatId)
     if (!chat) return
     chat.hasMessages = true
@@ -877,16 +925,82 @@ export class EventStore {
     return path.join(this.transcriptsDir, `${chatId}.jsonl`)
   }
 
+  private payloadSidecarPath(chatId: string) {
+    return path.join(this.transcriptsDir, `${chatId}.payloads.jsonl`)
+  }
+
+  private getPayloadIndex(chatId: string) {
+    const cached = this.payloadIndexes.get(chatId)
+    if (cached) return cached
+    while (this.payloadIndexes.size >= EventStore.TRANSCRIPT_CACHE_LIMIT) {
+      const oldest = this.payloadIndexes.keys().next().value
+      if (oldest === undefined) break
+      this.payloadIndexes.delete(oldest)
+    }
+    const index = new TranscriptPayloadIndex(this.payloadSidecarPath(chatId))
+    this.payloadIndexes.set(chatId, index)
+    return index
+  }
+
+  /**
+   * Whether a result belongs to a tool that renders inline and so keeps its
+   * content in the header. The call is almost always the previous entry or
+   * close to it, so the backward scan ends fast.
+   */
+  private isInlineResult(chatId: string, toolId: string) {
+    const entries = this.getTranscriptEntries(chatId)
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index]!
+      if (entry.kind === "tool_call" && entry.tool.toolId === toolId) {
+        return INLINE_TOOL_KINDS.has(entry.tool.toolKind)
+      }
+    }
+    return false
+  }
+
+  private dropTranscriptCaches(chatId: string) {
+    this.transcriptCache.delete(chatId)
+    this.payloadIndexes.delete(chatId)
+  }
+
+  /** Transcript, payload sidecar and media of a chat that is gone for good. */
+  private async removeTranscriptFiles(chatId: string) {
+    await rm(this.transcriptPath(chatId), { force: true })
+    await rm(this.payloadSidecarPath(chatId), { force: true })
+    await removeTranscriptMedia(this.dataDir, chatId)
+    this.dropTranscriptCaches(chatId)
+  }
+
   /** Absolute path of a chat's JSONL transcript (may not exist yet for a fresh chat). */
   getTranscriptPath(chatId: string) {
     return this.transcriptPath(chatId)
   }
 
   /**
-   * Every entry for a chat, loading from disk on miss. Callers must not mutate.
-   *
-   * This is the only transcript read there is: rendering, export, handoff and
-   * anchor resolution all want the whole thing.
+   * Absolute path of the file behind a transcript media URL, or null when
+   * the URL is not one of ours or names a chat this store does not have.
+   */
+  resolveTranscriptMediaPath(url: string) {
+    const parsed = parseTranscriptMediaUrl(url)
+    if (!parsed || !this.state.chatsById.has(parsed.chatId)) return null
+    return path.join(getTranscriptMediaDir(this.dataDir, parsed.chatId), parsed.name)
+  }
+
+  private hasSlimMarker() {
+    if (!existsSync(this.slimMarkerPath)) return false
+    try {
+      const marker = JSON.parse(readFileSyncImmediate(this.slimMarkerPath, "utf8")) as { version?: number }
+      return marker.version === SLIM_SWEEP_VERSION
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Every entry for a chat as the transcript file holds it, which is header
+   * form: tool bodies live in the payload sidecar and are merged back only by
+   * `getEntriesById` and `getMessages`. Loads from disk on miss. Callers must
+   * not mutate.
    */
   private getTranscriptEntries(chatId: string): TranscriptEntry[] {
     const cached = this.transcriptCache.get(chatId)
@@ -991,6 +1105,7 @@ export class EventStore {
   }
 
   async setSidebarProjectOrder(projectIds: string[]) {
+    this.stateVersion += 1
     const validProjectIds = projectIds.filter((projectId) => {
       const project = this.state.projectsById.get(projectId)
       return Boolean(project && !project.deletedAt)
@@ -1065,12 +1180,19 @@ export class EventStore {
     await this.setAutoPlan(chatId, sourceChat.autoPlan)
     await this.setPendingForkSessionToken(chatId, sourceSessionToken)
 
+    // The fork gets its own copy of any images, and its entries point at
+    // that copy, so deleting the source later does not blank its screenshots.
     const sourceEntries = this.getMessages(sourceChatId)
+      .map((entry) => retargetEntryMediaUrls(entry, sourceChatId, chatId))
     if (sourceEntries.length > 0) {
       const transcriptPath = this.transcriptPath(chatId)
       const payload = sourceEntries.map((entry) => JSON.stringify(entry)).join("\n")
       this.writeChain = this.writeChain.then(async () => {
         await this.ensureTranscriptsDir()
+        await copyTranscriptMedia(this.dataDir, sourceChatId, chatId)
+        // `getMessages` merged the payloads back in, so the fork's transcript
+        // is whole on disk; its first slim sweep or append leaves it that way
+        // until a rewrite, and every reader accepts both forms.
         await writeFile(transcriptPath, `${payload}\n`, "utf8")
         const chat = this.state.chatsById.get(chatId)
         if (chat) {
@@ -1191,9 +1313,7 @@ export class EventStore {
       }
       await this.append(this.chatsLogPath, event)
 
-      const transcriptPath = this.transcriptPath(chat.id)
-      await rm(transcriptPath, { force: true })
-      this.transcriptCache.delete(chat.id)
+      await this.removeTranscriptFiles(chat.id)
 
       prunedChatIds.push(chat.id)
     }
@@ -1296,9 +1416,7 @@ export class EventStore {
       }
       await this.append(this.chatsLogPath, event)
 
-      const transcriptPath = this.transcriptPath(chat.id)
-      await rm(transcriptPath, { force: true })
-      this.transcriptCache.delete(chat.id)
+      await this.removeTranscriptFiles(chat.id)
 
       deletedChatIds.push(chat.id)
     }
@@ -1430,6 +1548,50 @@ export class EventStore {
   }
 
   /**
+   * Where a socket's window on this chat should start when it opens: the
+   * last `assistantMessages` assistant texts, widened to reach the stored
+   * read anchor so restoring a position never lands outside the window.
+   */
+  getInitialTranscriptWindowStart(chatId: string, assistantMessages: number): number {
+    const entries = this.getTranscriptEntries(chatId)
+    const anchor = this.getChatReadAnchor(chatId)
+    const anchorIndex = anchor && !anchor.atEnd
+      ? entries.findIndex((entry) => entry._id === anchor.messageId)
+      : -1
+    return findTranscriptWindowStart(entries, {
+      endExclusive: entries.length,
+      assistantMessages,
+      ...(anchorIndex >= 0 ? { mustIncludeIndex: anchorIndex } : {}),
+    })
+  }
+
+  /**
+   * A window start further back than `currentStart`: one more window of
+   * assistant messages, or far enough to include `untilMessageId`, or 0 for
+   * everything. Never moves forward; a target already inside the window
+   * leaves it alone.
+   */
+  widenTranscriptWindowStart(
+    chatId: string,
+    currentStart: number,
+    options: { assistantMessages: number; untilMessageId?: string; all?: boolean }
+  ): number {
+    if (options.all) return 0
+    const entries = this.getTranscriptEntries(chatId)
+    const start = Math.max(0, Math.min(currentStart, entries.length))
+    if (options.untilMessageId !== undefined) {
+      const index = entries.findIndex((entry) => entry._id === options.untilMessageId)
+      if (index < 0 || index >= start) return start
+      return findTranscriptWindowStart(entries, {
+        endExclusive: start,
+        assistantMessages: options.assistantMessages,
+        mustIncludeIndex: index,
+      })
+    }
+    return findTranscriptWindowStart(entries, { endExclusive: start, assistantMessages: options.assistantMessages })
+  }
+
+  /**
    * `_id` of the entry at an absolute index, or null when the index is out of
    * range or sits before the loaded window.
    *
@@ -1459,10 +1621,15 @@ export class EventStore {
     if (entryIds.length === 0) return []
     const wanted = new Set(entryIds)
     const found: TranscriptEntry[] = []
+    let index: TranscriptPayloadIndex | null = null
     for (const entry of this.getTranscriptEntries(chatId)) {
       if (!wanted.has(entry._id)) continue
       const { debugRaw, ...rest } = entry
-      found.push(rest as TranscriptEntry)
+      // Only headers marked `trimmed` have a sidecar line; anything else
+      // (an inline kind, or a transcript written before the sidecar) is
+      // already whole.
+      const payload = rest.trimmed ? (index ??= this.getPayloadIndex(chatId)).read(rest._id) : null
+      found.push(mergeTranscriptPayload(rest as TranscriptEntry, payload ?? undefined))
       if (found.length === wanted.size) break
     }
     return found
@@ -1489,16 +1656,25 @@ export class EventStore {
     if (entry.kind === "user_prompt") {
       await this.recordLastMessageAt(chatId, entry.createdAt)
     }
-    const payload = `${JSON.stringify(entry)}\n`
     const transcriptPath = this.transcriptPath(chatId)
     this.writeChain = this.writeChain.then(async () => {
       await this.ensureTranscriptsDir()
-      await appendFile(transcriptPath, payload, "utf8")
+      // Bytes the header points at go to disk first (image files, then the
+      // payload line), so a header on disk never names something missing.
+      const stored = await externalizeEntryImages(entry, { dataDir: this.dataDir, chatId })
+      const { header, payload } = splitTranscriptEntry(stored, (toolId) => this.isInlineResult(chatId, toolId))
+      if (payload) {
+        const line = serializeTranscriptPayload(payload)
+        await appendFile(this.payloadSidecarPath(chatId), line, "utf8")
+        this.payloadIndexes.get(chatId)?.noteAppended(payload._id, Buffer.byteLength(line, "utf8"))
+      }
+      const headerLine = `${JSON.stringify(header)}\n`
+      await appendFile(transcriptPath, headerLine, "utf8")
       this.applyMessageMetadata(chatId, entry)
-      // Deep clone via the already-serialized payload: the cached entry is
+      // Deep clone via the already-serialized line: the cached entry is
       // byte-identical to what a cold disk read would produce, and callers
       // that keep mutating their entry can't alias into the cache.
-      this.transcriptCache.get(chatId)?.push(JSON.parse(payload) as TranscriptEntry)
+      this.transcriptCache.get(chatId)?.push(JSON.parse(headerLine) as TranscriptEntry)
     })
     return this.writeChain
   }
@@ -1700,8 +1876,18 @@ export class EventStore {
     return [...this.sidebarProjectOrder]
   }
 
+  /**
+   * The whole transcript with every tool body merged back in. This reads
+   * the payload sidecar end to end, so it is for export, handoff and fork,
+   * not for anything that runs per push.
+   */
   getMessages(chatId: string) {
-    return cloneTranscriptEntries(this.getTranscriptEntries(chatId))
+    const entries = this.getTranscriptEntries(chatId)
+    if (!entries.some((entry) => entry.trimmed)) return cloneTranscriptEntries(entries)
+    const payloads = readAllTranscriptPayloads(this.payloadSidecarPath(chatId))
+    return entries.map((entry) => entry.trimmed
+      ? mergeTranscriptPayload({ ...entry }, payloads.get(entry._id))
+      : { ...entry })
   }
 
   getQueuedMessages(chatId: string) {
@@ -1725,15 +1911,57 @@ export class EventStore {
    * history used to be. Sending all of it means the client can render, search
    * and map the whole conversation without ever asking for more.
    *
+   * The transcript file is already in header form, so the clone below only
+   * has work to do on entries written before the payload sidecar existed.
+   *
    * `startIndex` is always 0. It stays on the shape because streamed appends
    * are sent as slices positioned against it.
    */
-  getClientTranscript(chatId: string) {
+  /**
+   * The transcript as a client sees it, from `fromIndex` on.
+   *
+   * Cloning is per entry, so a push used to clone the whole chat and then
+   * throw away everything before the window. Callers pass the earliest index
+   * any subscriber holds. `startIndex` records where the clone begins so the
+   * router can still slice per socket.
+   */
+  getClientTranscript(chatId: string, fromIndex = 0) {
+    const entries = this.getTranscriptEntries(chatId)
+    const start = Math.max(0, Math.min(fromIndex, entries.length))
     return {
-      messages: cloneTranscriptEntriesForClient(this.getTranscriptEntries(chatId)),
-      startIndex: 0,
+      messages: cloneTranscriptEntriesForClient(start === 0 ? entries : entries.slice(start)),
+      startIndex: start,
       readAnchor: this.getChatReadAnchor(chatId),
+      outline: this.getTranscriptOutline(chatId, entries),
     }
+  }
+
+  /**
+   * Outline per cached transcript, rebuilt only when a prompt was appended.
+   * Keyed by the entries array, which appends grow in place and a reload
+   * replaces, so a stale array can never serve a stale outline. Between
+   * prompts only the appended tail is scanned.
+   */
+  private readonly outlineCache = new WeakMap<TranscriptEntry[], { length: number; outline: TranscriptOutlineEntry[] }>()
+
+  private getTranscriptOutline(chatId: string, entries: TranscriptEntry[]): TranscriptOutlineEntry[] {
+    const cached = this.outlineCache.get(entries)
+    if (cached && cached.length <= entries.length) {
+      let promptAppended = false
+      for (let index = cached.length; index < entries.length; index += 1) {
+        if (entries[index]!.kind === "user_prompt") {
+          promptAppended = true
+          break
+        }
+      }
+      if (!promptAppended) {
+        cached.length = entries.length
+        return cached.outline
+      }
+    }
+    const outline = buildTranscriptOutline(entries)
+    this.outlineCache.set(entries, { length: entries.length, outline })
+    return outline
   }
 
   listProjects() {
@@ -1831,8 +2059,75 @@ export class EventStore {
     this.clearLegacyTranscriptState()
     await this.compact()
     this.transcriptCache.clear()
+    this.payloadIndexes.clear()
     onProgress?.(`${LOG_PREFIX} transcript migration complete`)
     return true
+  }
+
+  /**
+   * Drop `debugRaw` from tool results and move inline images to disk, in
+   * every transcript on disk. See `transcript-slim.ts` and
+   * `transcript-media.ts` for what that buys.
+   *
+   * Runs once per data dir: a marker file records completion, and only
+   * `force` repeats the sweep (the `slim-transcripts` CLI command). Each
+   * rewrite is queued on the write chain, so an append to the same chat
+   * waits for the rename rather than landing in the file being replaced.
+   * A rewritten chat is dropped from the transcript cache; the next read
+   * parses the slim file, which is the cheap read this exists to make.
+   */
+  async slimTranscripts(options?: { force?: boolean; onProgress?: (message: string) => void }) {
+    const stats = { chats: 0, rewritten: 0, bytesBefore: 0, bytesAfter: 0 }
+    if (!options?.force && this.hasSlimMarker()) return stats
+
+    await this.ensureTranscriptsDir()
+    const files = (await readdir(this.transcriptsDir))
+      .filter((name) => name.endsWith(".jsonl") && !name.endsWith(".payloads.jsonl"))
+    for (const name of files) {
+      const chatId = name.slice(0, -".jsonl".length)
+      const transcriptPath = path.join(this.transcriptsDir, name)
+      stats.chats += 1
+      this.writeChain = this.writeChain.then(async () => {
+        let result: Awaited<ReturnType<typeof slimTranscriptFile>>
+        // Calls precede their results in a transcript, so this set is
+        // complete by the time a result asks about its tool.
+        const inlineToolIds = new Set<string>()
+        const sidecarPath = this.payloadSidecarPath(chatId)
+        try {
+          result = await slimTranscriptFile(transcriptPath, async (entry) => {
+            if (entry.kind === "tool_call" && INLINE_TOOL_KINDS.has(entry.tool.toolKind)) {
+              inlineToolIds.add(entry.tool.toolId)
+            }
+            const stored = await externalizeEntryImages(entry, { dataDir: this.dataDir, chatId })
+            const { header, payload } = splitTranscriptEntry(stored, (toolId) => inlineToolIds.has(toolId))
+            // The payload line lands before the header file is renamed over,
+            // same order as a live append.
+            if (payload) await appendFile(sidecarPath, serializeTranscriptPayload(payload), "utf8")
+            return header
+          })
+        } catch (error) {
+          options?.onProgress?.(`${LOG_PREFIX} transcript slim: skipped ${name}: ${error instanceof Error ? error.message : String(error)}`)
+          return
+        }
+        stats.bytesBefore += result.bytesBefore
+        stats.bytesAfter += result.bytesAfter
+        if (!result.changed) return
+        stats.rewritten += 1
+        this.dropTranscriptCaches(chatId)
+        options?.onProgress?.(
+          `${LOG_PREFIX} transcript slim: ${name} ${formatMegabytes(result.bytesBefore)} → ${formatMegabytes(result.bytesAfter)}`
+        )
+      })
+      await this.writeChain
+    }
+
+    await writeFile(this.slimMarkerPath, `${JSON.stringify({ version: SLIM_SWEEP_VERSION, completedAt: Date.now() })}\n`, "utf8")
+    if (stats.rewritten > 0) {
+      options?.onProgress?.(
+        `${LOG_PREFIX} transcript slim complete: ${stats.rewritten}/${stats.chats} chats rewritten, ${formatMegabytes(stats.bytesBefore)} → ${formatMegabytes(stats.bytesAfter)}`
+      )
+    }
+    return stats
   }
 
   private async shouldCompact() {

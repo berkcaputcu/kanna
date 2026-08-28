@@ -32,13 +32,28 @@ React client (src/client)
 - Snapshot pushes dedupe by signature: sidebar/chat use the serialized
   snapshot itself (built once per broadcast and shared across sockets),
   project-git uses a version counter. Keep that property when adding topics.
+- A chat subscription holds a window of the transcript, not all of it:
+  the last N assistant messages (`transcript.windowAssistantMessages`,
+  default 50), widened to reach the read anchor. `chat.loadOlder` moves the
+  window back and the older slice arrives as an incremental push that lands
+  in front. `outline` on the snapshot names every user prompt so the minimap
+  covers the whole chat. Logic in `src/shared/transcript-window.ts`.
 - Provider adapters normalize three different wire protocols into
   `HarnessEvent`s (`harness-types.ts`). Claude runs through the Agent SDK in
   `agent.ts` directly; codex/cursor/pi produce `HarnessTurn`s.
 - Transcripts are append-only JSONL per chat (`transcripts/<chatId>.jsonl`)
   with a small LRU cache in the EventStore. `debugRaw` (raw provider JSON) is
-  stamped only on `system_init` and Claude `tool_result` entries — the only
-  places the client reads it.
+  stamped only on `system_init` — the one entry with a raw JSON view. Tool
+  results keep `tool_use_result` as `structuredResult` instead, and only for
+  `ask_user_question` / `exit_plan_mode`.
+- The transcript file holds entries in header form. Tool bodies (file
+  contents, edits, command output) live in `transcripts/<chatId>.payloads.jsonl`
+  and are read by byte offset when a row is opened (`transcript-payloads.ts`).
+  Images in tool results are files under `media/<chatId>/`, referenced by URL
+  (`transcript-media.ts`). `getMessages()` merges everything back for export,
+  handoff and fork. `slimTranscripts` rewrites older transcripts to this shape
+  once per data dir (`kanna slim-transcripts` forces it). Agents handed a
+  transcript path see headers only.
 
 ## Conventions
 

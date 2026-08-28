@@ -17,7 +17,7 @@ import {
   useSidebarReady,
   useSidebarStore,
 } from "../stores/sidebarStore"
-import type { BranchActionFailure, BranchActionSuccess, ChatSnapshot, LocalProjectsSnapshot, SidebarChatRow, SidebarData } from "../../shared/types"
+import type { BranchActionFailure, BranchActionSuccess, ChatSnapshot, HydratedTranscriptMessage, LocalProjectsSnapshot, SidebarChatRow, SidebarData, TranscriptOutlineEntry } from "../../shared/types"
 import type { AskUserQuestionItem } from "../components/messages/types"
 import type { OpenLocalLinkTarget } from "../components/messages/shared"
 import { useAppDialog } from "../components/ui/app-dialog"
@@ -46,14 +46,14 @@ import {
   cachedWindowToMessages,
   createTranscriptCacheWriter,
   readCachedWindow,
-  toCachedSpan,
   type CachedTranscriptWindow,
 } from "./chatTranscriptCache"
+import { DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES, trimTranscriptWindow } from "../../shared/transcript-window"
 import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shared/cloud-api"
 import { KannaSocket, type SocketStatus } from "./socket"
 import { useAppSettingsSync } from "./useAppSettingsSync"
 import { useChatCommands } from "./useChatCommands"
-import { useChatReadAnchor, type ChatReadAnchorState } from "./useChatReadAnchor"
+import { useChatReadAnchor, type ChatReadAnchorState, type ReadAnchorLayoutSource } from "./useChatReadAnchor"
 import { useSendMessage } from "./useSendMessage"
 import type { EditorOpenSettings, OpenExternalAction } from "../../shared/protocol"
 
@@ -80,6 +80,11 @@ export {
 
 /** Stable identity so an empty transcript does not re-derive rows each render. */
 const EMPTY_TRANSCRIPT_ENTRIES: TranscriptEntry[] = []
+const EMPTY_OUTLINE: TranscriptOutlineEntry[] = []
+// `queuedMessages` is a prop of the memoized transcript viewport. A fresh `[]`
+// per render failed its shallow compare and re-rendered the whole viewport on
+// every push.
+const EMPTY_QUEUED_MESSAGES: ChatSnapshot["queuedMessages"] = []
 
 /**
  * How long to wait for the local transcript cache before subscribing without
@@ -156,7 +161,14 @@ export interface KannaState {
   /** Server-stored read position for the active chat; drives restore on open. */
   readAnchorState: ChatReadAnchorState
   /** Report the message at the top of the viewport (throttled write). */
-  reportReadAnchor: (messageId: string, atEnd: boolean) => void
+  reportReadAnchor: (messageId: string, atEnd: boolean, layout?: ReadAnchorLayoutSource) => void
+  /** Entries exist before the loaded window; "load earlier" has somewhere to go. */
+  hasOlderMessages: boolean
+  /** Every user prompt in the chat, loaded or not (see shared/transcript-window.ts). */
+  transcriptOutline: TranscriptOutlineEntry[]
+  /** Widen the window toward the start; the rows arrive on the subscription. */
+  loadOlderMessages: (options?: { untilMessageId?: string; all?: boolean }) => Promise<void>
+  isLoadingOlderMessages: boolean
   chatDiffSnapshot: ChatDiffSnapshot | null
   keybindings: KeybindingsSnapshot | null
   appSettings: AppSettingsSnapshot | null
@@ -166,7 +178,6 @@ export interface KannaState {
   localProjectsReady: boolean
   commandError: string | null
   startingLocalPath: string | null
-  sidebarOpen: boolean
   sidebarCollapsed: boolean
   messages: ReturnType<typeof processTranscriptMessages>
   queuedMessages: QueuedChatMessage[]
@@ -189,7 +200,6 @@ export interface KannaState {
   editorLabel: string
   hasSelectedProject: boolean
   openSidebar: () => void
-  closeSidebar: () => void
   collapseSidebar: () => void
   expandSidebar: () => void
   handleCreateChat: (projectId: string) => Promise<void>
@@ -250,7 +260,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const [localProjectsReady, setLocalProjectsReady] = useState(false)
   const [chatReady, setChatReady] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [commandError, setCommandError] = useState<string | null>(null)
   const [startingLocalPath, setStartingLocalPath] = useState<string | null>(null)
@@ -309,6 +318,51 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleValidateLlmProvider,
   } = useAppSettingsSync({ socket, connectionStatus, setCommandError })
 
+  // Read through a ref by the chat subscription, which must not re-run (and
+  // re-send the transcript) every time settings change.
+  const transcriptWindowSizeRef = useRef(DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES)
+  transcriptWindowSizeRef.current = appSettings?.transcript?.windowAssistantMessages ?? DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES
+
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false)
+  /**
+   * Widen the open chat's window toward the start. The older slice arrives
+   * as a push on the subscription, not in the ack, so callers wait on the
+   * snapshot rather than on this promise for rows.
+   */
+  const loadOlderMessages = useCallback(async (options?: { untilMessageId?: string; all?: boolean }) => {
+    if (!activeChatId) return
+    setIsLoadingOlderMessages(true)
+    try {
+      await socket.command<{ startIndex: number }>({
+        type: "chat.loadOlder",
+        chatId: activeChatId,
+        ...(options?.untilMessageId !== undefined ? { untilMessageId: options.untilMessageId } : {}),
+        ...(options?.all ? { all: true } : {}),
+      })
+    } catch (error) {
+      setCommandError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsLoadingOlderMessages(false)
+    }
+  }, [activeChatId, socket])
+
+  // The span this client holds for the open chat, for resubscribing after a
+  // reconnect. Read from a ref: the subscription outlives any one render.
+  const heldChatSpanRef = useRef<{ chatId: string; span: { start: number; end: number; endEntryId: string } } | null>(null)
+  useEffect(() => {
+    const last = chatSnapshot?.messages[chatSnapshot.messages.length - 1]
+    heldChatSpanRef.current = chatSnapshot && activeChatId && last
+      ? {
+        chatId: activeChatId,
+        span: {
+          start: chatSnapshot.startIndex,
+          end: chatSnapshot.startIndex + chatSnapshot.messages.length,
+          endEntryId: last._id,
+        },
+      }
+      : null
+  }, [activeChatId, chatSnapshot])
+
   useEffect(() => {
     if (!activeChatId) {
       setChatSnapshot(null)
@@ -342,14 +396,35 @@ export function useKannaState(activeChatId: string | null): KannaState {
     function subscribeToChat(cached: CachedTranscriptWindow | null) {
       if (cancelled || subscribed) return
       subscribed = true
-      const span = toCachedSpan(cached)
-      if (cached && span) base = cachedWindowToMessages(cached)
-      // No `recentLimit`: the server sizes the window to reach the stored read
-      // anchor and returns it inline. Passing one here would re-subscribe (and
-      // re-send the whole transcript) once the anchor resolved.
+      // A cache written before windows existed holds the whole chat. Cut it
+      // to the window a fresh open would get before painting from it, so a
+      // cached chat is not the one case that still mounts every row. The span
+      // sent to the server is the trimmed one, so it resumes from there.
+      const trimmed = cached
+        ? trimTranscriptWindow(cachedWindowToMessages(cached), transcriptWindowSizeRef.current)
+        : null
+      const lastEntryId = trimmed?.messages[trimmed.messages.length - 1]?._id
+      const span = trimmed && lastEntryId
+        ? { start: trimmed.startIndex, end: trimmed.startIndex + trimmed.messages.length, endEntryId: lastEntryId }
+        : null
+      if (trimmed && span) base = trimmed
+      // The server sizes the window (the transcript-window setting, widened
+      // to reach the stored read anchor) and returns the anchor inline.
       unsubscribe = socket.subscribe<ChatSnapshot | null>(
         { type: "chat", chatId, ...(span ? { cachedSpan: span } : {}) },
-        handleSnapshot
+        handleSnapshot,
+        undefined,
+        {
+          // A reconnect used to resubscribe with the topic from the first
+          // open, so every socket drop cost a full window (20 KB on a long
+          // chat). Naming what is held by now makes it a tail, or nothing.
+          topicOnReconnect: () => {
+            const held = heldChatSpanRef.current
+            return held && held.chatId === chatId
+              ? { type: "chat", chatId, cachedSpan: held.span }
+              : { type: "chat", chatId }
+          },
+        }
       )
     }
 
@@ -499,11 +574,18 @@ export function useKannaState(activeChatId: string | null): KannaState {
     () => [...serverTranscriptEntries, ...optimisticTranscriptEntries],
     [optimisticTranscriptEntries, serverTranscriptEntries]
   )
-  const messages = useMemo(() => processTranscriptMessages(transcriptEntries), [transcriptEntries])
+  // Hands the previous result back in so a push that appended entries hydrates
+  // only the new ones. See `processTranscriptMessages` for the prefix rule.
+  const previousMessagesRef = useRef<HydratedTranscriptMessage[] | null>(null)
+  const messages = useMemo(() => {
+    const next = processTranscriptMessages(transcriptEntries, previousMessagesRef.current)
+    previousMessagesRef.current = next
+    return next
+  }, [transcriptEntries])
   const previousPrompt = useMemo(() => getPreviousPrompt(messages), [messages])
   const latestToolIds = useMemo(() => getLatestToolIds(messages), [messages])
   const runtime = activeChatSnapshot?.runtime ?? null
-  const queuedMessages = activeChatSnapshot?.queuedMessages ?? []
+  const queuedMessages = activeChatSnapshot?.queuedMessages ?? EMPTY_QUEUED_MESSAGES
   const optimisticTurnStartedAt = optimisticProcessing?.scopeId === optimisticScopeId
     ? optimisticProcessing.startedAt
     : null
@@ -594,7 +676,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     setSelectedProjectId(projectId)
     setPendingChatId(result.chatId)
     navigate(`/chat/${result.chatId}`)
-    setSidebarOpen(false)
     setCommandError(null)
   }, [activeChatId, navigate, socket])
 
@@ -658,7 +739,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
       })
       setPendingChatId(result.chatId)
       navigate(`/chat/${result.chatId}`)
-      setSidebarOpen(false)
       setCommandError(null)
     } catch (error) {
       setCommandError(error instanceof Error ? error.message : String(error))
@@ -860,8 +940,9 @@ export function useKannaState(activeChatId: string | null): KannaState {
     navigate("/")
   }, [fallbackLocalProjectPath, navigate, selectedProjectId, startChatFromIntent])
 
-  const openSidebar = useCallback(() => setSidebarOpen(true), [])
-  const closeSidebar = useCallback(() => setSidebarOpen(false), [])
+  // On mobile the sidebar is the `/` page rather than an overlay, so "open"
+  // means navigate there. Desktop always shows it and never calls this.
+  const openSidebar = useCallback(() => navigate("/"), [navigate])
   const collapseSidebar = useCallback(() => setSidebarCollapsed(true), [])
   const expandSidebar = useCallback(() => setSidebarCollapsed(false), [])
 
@@ -873,6 +954,10 @@ export function useKannaState(activeChatId: string | null): KannaState {
     chatSnapshot,
     readAnchorState,
     reportReadAnchor,
+    hasOlderMessages: (activeChatSnapshot?.startIndex ?? 0) > 0,
+    transcriptOutline: activeChatSnapshot?.outline ?? EMPTY_OUTLINE,
+    loadOlderMessages,
+    isLoadingOlderMessages,
     chatDiffSnapshot,
     keybindings,
     appSettings,
@@ -882,7 +967,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     localProjectsReady,
     commandError,
     startingLocalPath,
-    sidebarOpen,
     sidebarCollapsed,
     messages,
     queuedMessages,
@@ -900,7 +984,6 @@ export function useKannaState(activeChatId: string | null): KannaState {
     editorLabel,
     hasSelectedProject,
     openSidebar,
-    closeSidebar,
     collapseSidebar,
     expandSidebar,
     handleCreateChat,

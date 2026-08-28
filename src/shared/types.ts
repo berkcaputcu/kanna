@@ -859,17 +859,23 @@ export interface SidebarChatRow {
    * chat parked mid-turn (plan mode / a permission prompt, which end no turn)
    * still sorts by when it actually started asking for you rather than by when
    * you last hit send. Drives sidebar recency alongside `lastMessageAt`.
+   *
+   * Coarse on purpose: the server floors it to `SIDEBAR_ACTIVITY_RESOLUTION_MS`
+   * buckets (read-models.ts) so a streaming turn serializes to identical
+   * snapshots between real changes and the push dedupe can drop them. Do not
+   * compare it against millisecond timestamps expecting exact ordering.
    */
   lastAgentMessageAt?: number
-  /** One-line preview of the latest user prompt. */
-  lastUserMessagePreview?: string
-  /** One-line preview of the latest agent text message. */
-  lastAgentMessagePreview?: string
   /**
-   * When that preview was written. Distinct from `lastAgentMessageAt`, which
-   * tool calls advance too: this dates the *words*, so a reader can tell a
-   * reply to the latest prompt from one carried over from the turn before.
+   * @deprecated No longer sent. The previews live in `ChatPreview`, fetched by
+   * `chat.getPreview` when a hover card opens. Carrying them here changed the
+   * sidebar snapshot on every assistant message, which defeated the push
+   * dedupe and re-derived the whole sidebar for text only a hover card reads.
    */
+  lastUserMessagePreview?: string
+  /** @deprecated See `lastUserMessagePreview`. */
+  lastAgentMessagePreview?: string
+  /** @deprecated See `lastUserMessagePreview`. */
   lastAgentMessagePreviewAt?: number
   /** Tool kind the chat is waiting on when status is waiting_for_user (e.g. "ask_user_question"). */
   pendingToolKind?: string
@@ -908,6 +914,19 @@ export interface ChatTouchedFile {
    */
   additions?: number
   deletions?: number
+}
+
+/**
+ * The text a hover card shows for a chat, fetched when the card opens.
+ *
+ * `lastAgentMessagePreviewAt` dates the words. `lastAgentMessageAt` on the
+ * sidebar row is advanced by tool calls too, so the card needs this one to
+ * tell a reply to the latest prompt from one carried over from the turn before.
+ */
+export interface ChatPreview {
+  lastUserMessagePreview?: string
+  lastAgentMessagePreview?: string
+  lastAgentMessagePreviewAt?: number
 }
 
 export interface ChatTouchedFilesResult {
@@ -1049,6 +1068,14 @@ export interface AppSettingsSnapshot {
     preset: EditorPreset
     commandTemplate: string
   }
+  transcript: {
+    /**
+     * How many assistant messages a chat opens on, and how many each "load
+     * earlier" adds. See shared/transcript-window.ts for why it is counted
+     * this way.
+     */
+    windowAssistantMessages: number
+  }
   defaultProvider: DefaultProviderPreference
   providerDefaults: ChatProviderPreferences
   /** Labs: the tabbed Chats/Projects "New Sidebar". On by default; false opts back into the legacy sidebar. */
@@ -1089,6 +1116,7 @@ export interface AppSettingsPatch {
   setupDismissed?: boolean
   terminal?: Partial<AppSettingsSnapshot["terminal"]>
   editor?: Partial<AppSettingsSnapshot["editor"]>
+  transcript?: Partial<AppSettingsSnapshot["transcript"]>
   defaultProvider?: DefaultProviderPreference
   providerDefaults?: {
     claude?: Partial<Omit<ProviderPreference<ClaudeModelOptions>, "modelOptions">> & {
@@ -1386,13 +1414,14 @@ interface TranscriptEntryBase {
   hidden?: boolean
   debugRaw?: string
   /**
-   * Set only when this entry was reduced for the wire: its unbounded tool
-   * payload fields were left on the server, to be fetched with
-   * `chat.getToolEntries` if the row is opened.
+   * Set when this entry is in header form: its unbounded tool payload fields
+   * are in the server's payload sidecar (`server/transcript-payloads.ts`), to
+   * be fetched with `chat.getToolEntries` if the row is opened.
    *
-   * Never present on disk, in `getMessages()` results, or in export bundles —
-   * those keep full fidelity. Absent also means "nothing was dropped", so a
-   * reader can treat presence as "fetching will reveal more".
+   * This is how the entry sits in the transcript file and on the wire. Never
+   * present in `getMessages()` results or in export bundles, which merge the
+   * payload back. Absent also means "nothing was dropped", so a reader can
+   * treat presence as "fetching will reveal more".
    */
   trimmed?: true
 }
@@ -1512,13 +1541,15 @@ export interface ToolResultEntry extends TranscriptEntryBase {
   content: unknown
   isError?: boolean
   /**
-   * `tool_use_result` lifted out of the provider's raw payload, present only
-   * for the tool kinds that need it (`ask_user_question`, `exit_plan_mode`).
+   * `tool_use_result` from the provider, present only for the tool kinds that
+   * render it (`ask_user_question`, `exit_plan_mode`).
    *
-   * Derived server-side when a page is built so the client never receives
-   * `debugRaw` — which is the whole raw provider message and duplicates
-   * `content`, accounting for ~66% of a typical chat snapshot. Not persisted;
-   * `debugRaw` remains on disk and is fetched on demand by the raw JSON view.
+   * Persisted at write time. Tool results used to carry the whole raw
+   * provider message in `debugRaw` just so this one field could be lifted
+   * out of it. That copy duplicated `content`, and for a screenshot read it
+   * duplicated 600 KB of base64, which is how chats grew past 100 MB on disk.
+   * Older transcripts still hold `debugRaw` here until `slimTranscripts`
+   * rewrites them; the wire clone lifts from either.
    */
   structuredResult?: unknown
 }
@@ -1918,9 +1949,11 @@ export interface ReadFileTextBlock {
   text: string
 }
 
+/** Inline base64 (`data`) or a file stored beside the transcript (`url`). */
 export interface ReadFileImageBlock {
   type: "image"
-  data: string
+  data?: string
+  url?: string
   mimeType?: string
 }
 
@@ -2004,6 +2037,24 @@ export interface ChatSnapshot {
    * anchored entry no longer exists.
    */
   readAnchor: ResolvedChatReadAnchor | null
+  /**
+   * Every user prompt in the transcript, loaded or not, so the minimap and
+   * jump targets cover the whole chat while `messages` holds only a window
+   * (see shared/transcript-window.ts). Present on a full snapshot and on
+   * any push where it changed; absent means "same as last time".
+   */
+  outline?: TranscriptOutlineEntry[]
+}
+
+/** One turn of a chat, as the outline names it. */
+export interface TranscriptOutlineEntry {
+  /** `TranscriptEntry._id` of the user prompt. */
+  id: string
+  /** Absolute index of that prompt in the transcript. */
+  index: number
+  /** The prompt, cut to a preview. */
+  preview: string
+  createdAt: number
 }
 
 /**

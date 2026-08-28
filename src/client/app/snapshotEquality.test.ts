@@ -63,6 +63,26 @@ describe("applyIncrementalChatSnapshot", () => {
     expect(applyIncrementalChatSnapshot(current, snapshot(13, ["e"], true))).toBeNull()
   })
 
+  test("a body that ends where the held window starts is spliced in front", () => {
+    const current = snapshot(10, ["c", "d"])
+    const next = applyIncrementalChatSnapshot(current, snapshot(8, ["a", "b"], true))
+    expect(next?.startIndex).toBe(8)
+    expect(next?.messages.map((entry) => entry._id)).toEqual(["a", "b", "c", "d"])
+    expect(next?.incremental).toBe(false)
+  })
+
+  test("an older body that overlaps the held window replaces what it covers", () => {
+    const current = snapshot(10, ["c", "d"])
+    const next = applyIncrementalChatSnapshot(current, snapshot(9, ["b", "c2"], true))
+    expect(next?.startIndex).toBe(9)
+    expect(next?.messages.map((entry) => entry._id)).toEqual(["b", "c2", "d"])
+  })
+
+  test("an older body that does not reach the held window is refused", () => {
+    const current = snapshot(10, ["c", "d"])
+    expect(applyIncrementalChatSnapshot(current, snapshot(5, ["x"], true))).toBeNull()
+  })
+
   test("a body starting before the held window is refused", () => {
     const current = snapshot(10, ["a", "b"])
     expect(applyIncrementalChatSnapshot(current, snapshot(8, ["x"], true))).toBeNull()
@@ -142,5 +162,58 @@ describe("foldChatSnapshot", () => {
     }
 
     expect(foldChatSnapshot(current, null, next)).toBe(next)
+  })
+})
+
+describe("foldChatSnapshot identity", () => {
+  test("a push that only appends entries keeps the untouched parts by identity", () => {
+    const current = snapshot(0, ["a"])
+    const incoming = { ...snapshot(0, ["a", "b"]), availableProviders: [] }
+    const next = foldChatSnapshot(current, null, incoming)
+
+    expect(next).not.toBe(current)
+    expect(ids(next)).toEqual(["a", "b"])
+    expect(next?.runtime).toBe(current.runtime)
+    expect(next?.queuedMessages).toBe(current.queuedMessages)
+    expect(next?.availableProviders).toBe(current.availableProviders)
+  })
+
+  test("a changed runtime comes through with its new identity", () => {
+    const current = snapshot(0, ["a"])
+    const incoming = snapshot(0, ["a", "b"])
+    incoming.runtime = { ...incoming.runtime, status: "running" }
+    const next = foldChatSnapshot(current, null, incoming)
+
+    expect(next?.runtime).toBe(incoming.runtime)
+    expect(next?.runtime.status).toBe("running")
+  })
+})
+
+describe("foldChatSnapshot providers", () => {
+  test("a provider flag change that rides a transcript push is kept", () => {
+    const current = snapshot(0, ["a"])
+    current.availableProviders = [{
+      id: "claude", label: "Claude", defaultModel: "m", supportsPlanMode: false, supportsAutoPlanMode: false,
+      models: [{ id: "m", label: "M", supportsEffort: false }], efforts: [],
+    } as ChatSnapshot["availableProviders"][number]]
+    const incoming = snapshot(0, ["a", "b"])
+    incoming.availableProviders = [{ ...current.availableProviders[0]!, supportsPlanMode: true }]
+    const next = foldChatSnapshot(current, null, incoming)
+    expect(next?.availableProviders[0]?.supportsPlanMode).toBe(true)
+  })
+})
+
+describe("applyIncrementalChatSnapshot carried fields", () => {
+  test("an incremental body without providers or anchor keeps the held ones", () => {
+    const current = snapshot(0, ["a"])
+    current.availableProviders = [{ id: "claude" } as ChatSnapshot["availableProviders"][number]]
+    current.readAnchor = { messageId: "a", atEnd: false } as ChatSnapshot["readAnchor"]
+    const incoming = snapshot(1, ["b"], true)
+    delete (incoming as Partial<ChatSnapshot>).availableProviders
+    delete (incoming as Partial<ChatSnapshot>).readAnchor
+    const next = applyIncrementalChatSnapshot(current, incoming)
+    expect(next?.availableProviders).toBe(current.availableProviders)
+    expect(next?.readAnchor).toBe(current.readAnchor)
+    expect(ids(next)).toEqual(["a", "b"])
   })
 })

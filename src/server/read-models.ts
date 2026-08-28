@@ -16,6 +16,8 @@ import type { ProjectRepoLabel } from "./worktree-probe"
 import type { ChatRecord, StoreState, TouchedFile } from "./events"
 import { resolveLocalPath } from "./paths"
 import { SERVER_PROVIDERS } from "./provider-catalog"
+import { buildTranscriptOutline } from "../shared/transcript-window"
+import type { TranscriptOutlineEntry } from "../shared/types"
 
 const SIDEBAR_RECENT_WINDOW_MS = 24 * 60 * 60 * 1_000
 const SIDEBAR_FALLBACK_PREVIEW_LIMIT = 5
@@ -36,6 +38,29 @@ export function deriveStatus(chat: ChatRecord, activeStatus?: KannaStatus): Kann
 
 function getSidebarChatSortTimestamp(chat: ChatRecord) {
   return chat.lastMessageAt ?? chat.createdAt
+}
+
+/**
+ * Resolution of `lastAgentMessageAt` on the wire.
+ *
+ * The raw value advances on every transcript entry, many times a second while
+ * a turn streams. Sidebar pushes dedupe by serializing the whole snapshot, so
+ * millisecond precision meant every entry changed the bytes and every entry
+ * shipped the sidebar to every socket. Nothing renders the value that fine:
+ * ages display at minute granularity, and the section that could sort a
+ * running chat by it deliberately sorts by when the user last sent instead
+ * (`getInProgressThreads`). Quantized here, snapshots between real changes are
+ * byte-identical, the dedupe absorbs them, and a streaming turn pushes the
+ * sidebar only when something visible moves — which is what lets those pushes
+ * ride the immediate path with no throttle in front of them.
+ *
+ * Floored, not rounded: this timestamp must never lead the clock, or "how long
+ * ago" could go negative on the client.
+ */
+export const SIDEBAR_ACTIVITY_RESOLUTION_MS = 15_000
+
+function quantizeSidebarActivity(timestampMs: number): number {
+  return Math.floor(timestampMs / SIDEBAR_ACTIVITY_RESOLUTION_MS) * SIDEBAR_ACTIVITY_RESOLUTION_MS
 }
 
 function canForkChat(
@@ -240,12 +265,11 @@ export function deriveSidebarData(
           ...(chat.lastTurnStartedAt != null ? { lastTurnStartedAt: chat.lastTurnStartedAt } : {}),
           ...(chat.lastTurnEndedAt != null ? { lastTurnEndedAt: chat.lastTurnEndedAt } : {}),
           ...(chat.turnCount ? { turnCount: chat.turnCount } : {}),
-          ...(chat.lastAgentMessageAt != null ? { lastAgentMessageAt: chat.lastAgentMessageAt } : {}),
-          ...(chat.lastUserMessagePreview ? { lastUserMessagePreview: chat.lastUserMessagePreview } : {}),
-          ...(chat.lastAgentMessagePreview ? { lastAgentMessagePreview: chat.lastAgentMessagePreview } : {}),
-          ...(chat.lastAgentMessagePreviewAt != null
-            ? { lastAgentMessagePreviewAt: chat.lastAgentMessagePreviewAt }
+          ...(chat.lastAgentMessageAt != null
+            ? { lastAgentMessageAt: quantizeSidebarActivity(chat.lastAgentMessageAt) }
             : {}),
+          // No message previews here: they change on every assistant message
+          // and only the hover card reads them (`chat.getPreview`).
           ...(pendingToolKind ? { pendingToolKind } : {}),
           ...(uncommittedWork ? { uncommittedWork: true } : {}),
           hasAutomation: false,
@@ -373,7 +397,7 @@ export function deriveChatSnapshot(
   activeStatuses: Map<string, KannaStatus>,
   drainingChatIds: Set<string>,
   chatId: string,
-  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "startIndex" | "readAnchor">
+  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "startIndex" | "readAnchor"> & { outline?: TranscriptOutlineEntry[] }
 ): ChatSnapshot | null {
   const chat = state.chatsById.get(chatId)
   if (!chat || chat.deletedAt) return null
@@ -406,5 +430,9 @@ export function deriveChatSnapshot(
     startIndex: transcript.startIndex,
     availableProviders: [...SERVER_PROVIDERS],
     readAnchor: transcript.readAnchor,
+    // The outline covers the whole chat even when `messages` starts at a
+    // window; the store caches it per transcript and only rebuilds when a
+    // prompt is appended.
+    outline: transcript.outline ?? buildTranscriptOutline(transcript.messages),
   }
 }
