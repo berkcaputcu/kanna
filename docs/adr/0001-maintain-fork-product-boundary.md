@@ -8,9 +8,9 @@ The fork may require manual adaptations when upstream changes cross a removed pr
 
 ## Synchronization checkpoint
 
-As of 2026-09-21, the fork's `main` is at `1b5f3e6` (`Apply selected upstream improvements`). The latest fetched `upstream/main` is `bec5028` (`Add generate_images, which saves and shows Nano Banana 2 Lite images`). The next upstream review should start from these refs, after refreshing `upstream`:
+As of 2026-09-21, the fork's `main` is at `5a91226` (`Document upstream synchronization checkpoint`), with the functional changes at `1b5f3e6` (`Apply selected upstream improvements`). The latest fetched `upstream/main` is `bec5028` (`Add generate_images, which saves and shows Nano Banana 2 Lite images`). The next upstream review should start from these refs, after refreshing `upstream`:
 
 ```sh
-git log --oneline 1b5f3e6..upstream/main
-git diff 1b5f3e6..upstream/main
+git log --oneline 5a91226..upstream/main
+git diff 5a91226..upstream/main
 ```
