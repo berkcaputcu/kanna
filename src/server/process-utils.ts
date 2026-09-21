@@ -74,6 +74,13 @@ function findInUserBinDirs(command: string, homeDir: string): string | null {
  */
 export function resolveCommandPath(command: string, homeDir = homedir()): string | null {
   if (!/^[\w.-]+$/.test(command)) return null
+
+  // Avoid the synchronous shell when the server's own PATH already resolves
+  // the command. The shell remains the fallback for launchers whose PATH is
+  // configured only in a login shell.
+  const direct = Bun.which(command)
+  if (direct) return direct
+
   const result = spawnSync("sh", ["-lc", `command -v -- ${command}`], {
     stdio: ["ignore", "pipe", "ignore"],
     encoding: "utf8",

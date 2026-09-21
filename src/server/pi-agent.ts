@@ -1,15 +1,12 @@
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
-import {
+import type {
   AuthStorage,
+  AgentSession,
+  AgentSessionEvent,
   DefaultResourceLoader,
   ModelRegistry,
-  SessionManager,
-  SettingsManager,
-  createAgentSession,
-  type AgentSession,
-  type AgentSessionEvent,
 } from "@mariozechner/pi-coding-agent"
 import type { Model } from "@mariozechner/pi-ai"
 import type { ContextWindowUsageSnapshot, HarnessSkill, LlmProviderKind, PiReasoningEffort } from "../shared/types"
@@ -21,6 +18,12 @@ import { buildKannaAgentCorrection, buildKannaAgentId, buildKannaAttributionInst
 import { appendSystemMessageBlock } from "./harness-skills"
 import { OPENROUTER_BASE_URL, readLlmProviderSnapshot } from "./llm-provider"
 import { timestamped } from "./transcript"
+
+let piSdkPromise: Promise<typeof import("@mariozechner/pi-coding-agent")> | null = null
+
+function loadPiSdk() {
+  return (piSdkPromise ??= import("@mariozechner/pi-coding-agent"))
+}
 
 /**
  * Adapter for the pi coding agent (@mariozechner/pi-coding-agent), driven
@@ -354,6 +357,7 @@ export class PiAgentManager {
     if (existing && existing.cwd === args.cwd) {
       return collectPiSkills(existing.resourceLoader)
     }
+    const { DefaultResourceLoader, SettingsManager } = await loadPiSdk()
     const loader = new DefaultResourceLoader({
       cwd: args.cwd,
       agentDir: this.agentDir,
@@ -418,6 +422,15 @@ export class PiAgentManager {
       this.sessions.delete(args.chatId)
       existing.session.dispose()
     }
+
+    const {
+      AuthStorage,
+      DefaultResourceLoader,
+      ModelRegistry,
+      SessionManager,
+      SettingsManager,
+      createAgentSession,
+    } = await loadPiSdk()
 
     // All state is Kanna-owned: in-memory credentials/settings, sessions under
     // Kanna's data root, and no discovery of the user's ~/.pi setup.

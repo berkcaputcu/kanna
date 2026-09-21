@@ -131,6 +131,49 @@ function rowLightsItself(row: ResolvedTranscriptRow): boolean {
   return row.kind === "single" && row.message.kind === "user_prompt"
 }
 
+type TranscriptRowItemProps = Pick<
+  ComponentProps<typeof KannaTranscriptRow>,
+  "row" | "toolGroupExpanded" | "onToolGroupExpandedChange" | "onAskUserQuestionSubmit" | "onExitPlanModeConfirm" | "onCodexApprovalSubmit"
+> & { flashBox: boolean; flashRow: boolean }
+
+/** Keep streamed transcript updates from walking every rendered row. */
+const TranscriptRowItem = memo(function TranscriptRowItem({
+  row,
+  flashBox,
+  flashRow,
+  toolGroupExpanded,
+  onToolGroupExpandedChange,
+  onAskUserQuestionSubmit,
+  onExitPlanModeConfirm,
+  onCodexApprovalSubmit,
+}: TranscriptRowItemProps) {
+  return (
+    <MessageScrollerItem
+      messageId={row.id}
+      // Deliberately not a scroll anchor. Marking turn starts makes
+      // the scroller pull each new one to the top of the viewport.
+    >
+      <div
+        className={cn(
+          "mx-auto mb-1 w-full max-w-[816px] rounded-xl p-2",
+          flashBox && "kanna-jump-flash",
+        )}
+        data-transcript-row-id={row.id}
+      >
+        <KannaTranscriptRow
+          row={row}
+          flash={flashRow}
+          toolGroupExpanded={toolGroupExpanded}
+          onToolGroupExpandedChange={onToolGroupExpandedChange}
+          onAskUserQuestionSubmit={onAskUserQuestionSubmit}
+          onExitPlanModeConfirm={onExitPlanModeConfirm}
+          onCodexApprovalSubmit={onCodexApprovalSubmit}
+        />
+      </div>
+    </MessageScrollerItem>
+  )
+})
+
 
 
 
@@ -1023,40 +1066,17 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
             <MessageScrollerContent style={contentContainerStyle}>
               {listHeader}
               {resolvedRows.map((row) => (
-                <MessageScrollerItem
+                <TranscriptRowItem
                   key={row.id}
-                  messageId={row.id}
-                  // Deliberately not a scroll anchor. Marking turn starts makes
-                  // the scroller pull each new one to the top of the viewport —
-                  // its "new turn begins here" behaviour. Sending should land
-                  // at the bottom, where the reply arrives, and the read
-                  // position is taken from the visible rows rather than from
-                  // anchors.
-                >
-                  {/* The row's own padding is what gives the jump highlight its
-                      breathing room, so it has to be uniform and inside the
-                      box. The gap between messages used to be 20px of bottom
-                      padding and is now 8 of padding either side plus 4 of
-                      margin, so the rhythm is unchanged. `max-w` grew by the
-                      padding to keep the text column itself at 800px. */}
-                  <div
-                    className={cn(
-                      "mx-auto mb-1 w-full max-w-[816px] rounded-xl p-2",
-                      flashRowId === row.id && !rowLightsItself(row) && "kanna-jump-flash",
-                    )}
-                    data-transcript-row-id={row.id}
-                  >
-                    <KannaTranscriptRow
-                      row={row}
-                      flash={flashRowId === row.id && rowLightsItself(row)}
-                      toolGroupExpanded={row.kind === "tool-group" ? (toolGroupExpanded[row.id] ?? false) : undefined}
-                      onToolGroupExpandedChange={handleToolGroupExpandedChange}
-                      onAskUserQuestionSubmit={onAskUserQuestionSubmit}
-                       onExitPlanModeConfirm={onExitPlanModeConfirm}
-                       onCodexApprovalSubmit={onCodexApprovalSubmit}
-                    />
-                  </div>
-                </MessageScrollerItem>
+                  row={row}
+                  flashBox={flashRowId === row.id && !rowLightsItself(row)}
+                  flashRow={flashRowId === row.id && rowLightsItself(row)}
+                  toolGroupExpanded={row.kind === "tool-group" ? (toolGroupExpanded[row.id] ?? false) : undefined}
+                  onToolGroupExpandedChange={handleToolGroupExpandedChange}
+                  onAskUserQuestionSubmit={onAskUserQuestionSubmit}
+                  onExitPlanModeConfirm={onExitPlanModeConfirm}
+                  onCodexApprovalSubmit={onCodexApprovalSubmit}
+                />
               ))}
               {listFooter}
             </MessageScrollerContent>

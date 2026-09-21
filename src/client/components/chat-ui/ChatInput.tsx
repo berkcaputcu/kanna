@@ -14,12 +14,12 @@ import {
 import { Button } from "../ui/button"
 import { Textarea } from "../ui/textarea"
 import { ScrollArea } from "../ui/scroll-area"
-import { cn } from "../../lib/utils"
+import { cn, generateUUID } from "../../lib/utils"
 import { useComposer } from "../../hooks/useComposer"
 import { useIsStandalone } from "../../hooks/useIsStandalone"
 import { useShallow } from "zustand/react/shallow"
 import { useChatInputStore } from "../../stores/chatInputStore"
-import { type ComposerState, useChatPreferencesStore } from "../../stores/chatPreferencesStore"
+import { NEW_CHAT_COMPOSER_ID, type ComposerState, useChatPreferencesStore } from "../../stores/chatPreferencesStore"
 import { CHAT_INPUT_ATTRIBUTE, focusNextChatInput, REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
 import { formatPathWithTilde } from "../../lib/pathUtils"
 import { copyTextToClipboard } from "../../lib/clipboard"
@@ -467,7 +467,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [chatId, storedDraft])
 
   useEffect(() => {
-    initializeComposerForChat(composerChatId)
+    if (composerChatId === NEW_CHAT_COMPOSER_ID) initializeComposerForChat(composerChatId)
   }, [composerChatId, initializeComposerForChat])
 
   useEffect(() => {
@@ -532,7 +532,9 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
       if (!file) break
 
       activeUploadsRef.current += 1
-      const tempId = crypto.randomUUID()
+      // crypto.randomUUID is unavailable in insecure browser contexts, such
+      // as a plain-http LAN or Tailscale hostname.
+      const tempId = generateUUID()
       const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined
       const generation = uploadGenerationRef.current
 

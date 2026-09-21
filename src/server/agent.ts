@@ -1045,6 +1045,7 @@ export class AgentCoordinator {
       claudeSession.session.close()
       this.claudeSessions.delete(chatId)
     }
+    this.codexManager.stopSession(chatId)
     this.piManager.closeChat(chatId)
     this.emitStateChange(chatId)
   }
@@ -1333,8 +1334,9 @@ export class AgentCoordinator {
     await this.store.setPlanMode(args.chatId, args.planMode)
     await this.store.setAutoPlan(args.chatId, args.autoPlan)
 
-    const existingMessages = this.store.getMessages(args.chatId)
-    const shouldGenerateTitle = args.appendUserPrompt && chat.title === "New Chat" && existingMessages.length === 0
+    let existingMessagesCache: ReturnType<typeof this.store.getMessages> | null = null
+    const existingMessages = () => (existingMessagesCache ??= this.store.getMessages(args.chatId))
+    const shouldGenerateTitle = args.appendUserPrompt && chat.title === "New Chat" && existingMessages().length === 0
     const optimisticTitle = shouldGenerateTitle ? fallbackTitleFromMessage(args.content) : null
 
     if (optimisticTitle) {
@@ -1352,7 +1354,7 @@ export class AgentCoordinator {
     // transcript, and build the wire-only handoff context from the entries
     // that precede this turn's prompt.
     const handoff = previousProvider !== null && previousProvider !== args.provider
-      ? await this.prepareProviderHandoff(args.chatId, previousProvider, args.provider, existingMessages)
+      ? await this.prepareProviderHandoff(args.chatId, previousProvider, args.provider, existingMessages())
       : null
 
     // Same-provider session recovery: when we're NOT switching harnesses but
@@ -1373,7 +1375,7 @@ export class AgentCoordinator {
         pendingForkSessionToken: chat.pendingForkSessionToken,
         accessMode: args.accessMode,
       })
-      ? await this.prepareSessionRestore(args.chatId, args.provider, existingMessages)
+      ? await this.prepareSessionRestore(args.chatId, args.provider, existingMessages())
       : null
 
     if (args.appendUserPrompt) {

@@ -10,6 +10,7 @@ import type { AgentProvider, QueuedChatMessage, ResolvedChatReadAnchor, Transcri
 import { STORE_VERSION } from "../shared/types"
 import {
   type ChatEvent,
+  type ChatRecord,
   type ProjectEvent,
   type QueuedMessageEvent,
   type SnapshotFile,
@@ -22,6 +23,7 @@ import {
   createEmptyState,
 } from "./events"
 import { resolveLocalPath } from "./paths"
+import { SIDEBAR_ACTIVITY_RESOLUTION_MS } from "./read-models"
 import { slimTranscriptFile } from "./transcript-slim"
 import {
   mergeTranscriptPayload,
@@ -879,9 +881,12 @@ export class EventStore {
   }
 
   private applyMessageMetadata(chatId: string, entry: TranscriptEntry) {
-    this.stateVersion += 1
     const chat = this.state.chatsById.get(chatId)
-    if (!chat) return
+    if (!chat) {
+      this.stateVersion += 1
+      return
+    }
+    const sidebarBefore = this.sidebarVisibleSignature(chat)
     chat.hasMessages = true
     if (entry.kind === "user_prompt") {
       // Monotonic, like `lastAgentMessageAt` below and like the logged stamp
@@ -910,6 +915,17 @@ export class EventStore {
       chat.lastAgentMessageAt = Math.max(chat.lastAgentMessageAt ?? 0, entry.createdAt)
     }
     chat.updatedAt = Math.max(chat.updatedAt, entry.createdAt)
+    if (this.sidebarVisibleSignature(chat) !== sidebarBefore) {
+      this.stateVersion += 1
+    }
+  }
+
+  /** Only bump sidebar derivation when an appended entry changes visible data. */
+  private sidebarVisibleSignature(chat: ChatRecord) {
+    const activityBucket = chat.lastAgentMessageAt == null
+      ? ""
+      : Math.floor(chat.lastAgentMessageAt / SIDEBAR_ACTIVITY_RESOLUTION_MS)
+    return `${chat.hasMessages}|${chat.lastMessageAt ?? ""}|${activityBucket}`
   }
 
   private append<TEvent extends StoreEvent>(filePath: string, event: TEvent) {

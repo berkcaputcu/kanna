@@ -1,3 +1,5 @@
+import { generateUUID } from "./utils"
+
 /**
  * The router-state contract for opening a chat *at a message*.
  *
@@ -29,7 +31,7 @@ export interface ChatJumpLocationState {
 }
 
 export function buildChatJumpLocationState(role: ChatJumpRole): ChatJumpLocationState {
-  return { jumpToRole: role, jumpRequestId: crypto.randomUUID() }
+  return { jumpToRole: role, jumpRequestId: generateUUID() }
 }
 
 /** Reads the jump out of an opaque `useLocation().state`, or null if absent. */

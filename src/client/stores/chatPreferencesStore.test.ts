@@ -4,11 +4,13 @@ import {
   NEW_CHAT_COMPOSER_ID,
   useChatPreferencesStore,
 } from "./chatPreferencesStore"
+import { useSidebarStore } from "./sidebarStore"
 
 const INITIAL_STATE = useChatPreferencesStore.getInitialState()
 
 afterEach(() => {
   useChatPreferencesStore.setState(INITIAL_STATE)
+  useSidebarStore.setState({ data: { projectGroups: [] }, ready: false, optimisticProjectOrder: null })
 })
 
 describe("migrateChatPreferencesState", () => {
@@ -537,10 +539,11 @@ describe("chat preference store", () => {
     })
   })
 
-  test("syncProviderDefaults refreshes untouched routed chat state after settings hydration", () => {
+  test("syncProviderDefaults leaves an existing chat state alone", () => {
     const store = useChatPreferencesStore.getState()
 
     store.initializeComposerForChat("chat-a")
+    const before = store.getComposerState("chat-a")
     store.syncProviderDefaults("last_used", {
       ...INITIAL_STATE.providerDefaults,
       claude: {
@@ -551,13 +554,7 @@ describe("chat preference store", () => {
       },
     })
 
-    expect(useChatPreferencesStore.getState().getComposerState("chat-a")).toEqual({
-      provider: "claude",
-      model: "opus",
-      modelOptions: { reasoningEffort: "max", contextWindow: "1m", fastMode: false },
-      planMode: true,
-      autoPlan: false,
-    })
+    expect(useChatPreferencesStore.getState().getComposerState("chat-a")).toEqual(before)
   })
 
   test("syncProviderDefaults does not replace a changed new-chat state", () => {
@@ -614,5 +611,37 @@ describe("chat preference store", () => {
       planMode: true,
       autoPlan: false,
     })
+  })
+
+  test("seeds an existing chat from the sidebar model when no local state exists", () => {
+    useSidebarStore.setState({
+      data: {
+        projectGroups: [{
+          groupKey: "project-1",
+          chats: [{ chatId: "chat-a", provider: "codex", model: "gpt-5.5" }],
+        }],
+      } as never,
+    })
+
+    const state = useChatPreferencesStore.getState().getComposerState("chat-a")
+    expect(state.provider).toBe("codex")
+    expect(state.model).toBe("gpt-5.5")
+  })
+
+  test("mutation helpers also seed an existing chat before changing its mode", () => {
+    useSidebarStore.setState({
+      data: {
+        projectGroups: [{
+          groupKey: "project-1",
+          chats: [{ chatId: "chat-a", provider: "codex", model: "gpt-5.5" }],
+        }],
+      } as never,
+    })
+
+    useChatPreferencesStore.getState().setChatComposerMode("chat-a", "plan")
+    const state = useChatPreferencesStore.getState().chatStates["chat-a"]
+    expect(state?.provider).toBe("codex")
+    expect(state?.model).toBe("gpt-5.5")
+    expect(state?.planMode).toBe(true)
   })
 })

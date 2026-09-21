@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { execFileSync } from "node:child_process"
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -99,6 +100,10 @@ describe("filesystem scanners", () => {
     return path.join(dir, "SKILL.md")
   }
 
+  function initGitRepo(repo: string) {
+    execFileSync("git", ["init", "--quiet", repo], { stdio: "ignore" })
+  }
+
   test("replaces codex chronicle's block-scalar '|' description, and only that", () => {
     const root = path.join(base, "codex-skills")
     // YAML block scalar: our single-line frontmatter reader captures the "|".
@@ -154,7 +159,7 @@ describe("filesystem scanners", () => {
 
   test("collectAncestorDirsToRepoRoot walks cwd up to the git root only", () => {
     const repo = path.join(base, "repo")
-    mkdirSync(path.join(repo, ".git"), { recursive: true })
+    initGitRepo(repo)
     const nested = path.join(repo, "packages", "app")
     mkdirSync(nested, { recursive: true })
     expect(collectAncestorDirsToRepoRoot(nested)).toEqual([
@@ -195,8 +200,9 @@ describe("filesystem scanners", () => {
   test("scanCodexSkills reads repo .agents/skills up to the git root plus user dirs", () => {
     const home = path.join(base, "home")
     const repo = path.join(base, "repo")
-    mkdirSync(path.join(repo, ".git"), { recursive: true })
+    initGitRepo(repo)
     const nested = path.join(repo, "packages", "app")
+    mkdirSync(nested, { recursive: true })
     writeSkill(path.join(repo, ".agents", "skills"), "repo-skill")
     writeSkill(path.join(home, ".agents", "skills"), "user-agents-skill")
     writeSkill(path.join(home, ".codex", "skills"), "legacy-codex-skill")

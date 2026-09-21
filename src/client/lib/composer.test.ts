@@ -295,4 +295,9 @@ describe("getEffectiveComposerState", () => {
     expect(effective.model).toBe(providerDefaults.pi.model)
     expect(effective.planMode).toBe(true)
   })
+
+  test("locked mismatch can preserve the chat's last model", () => {
+    const effective = getEffectiveComposerState(claudeState(), "pi", providerDefaults, "custom/pi-model")
+    expect(effective.model).toBe("custom/pi-model")
+  })
 })

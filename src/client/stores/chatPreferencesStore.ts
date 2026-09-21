@@ -24,6 +24,7 @@ import {
   type ProviderModelOptionsInput,
   type ProviderPreferenceInput,
 } from "../../shared/provider-preferences"
+import { findSidebarChat } from "./sidebarStore"
 
 export type { ChatProviderPreferences, DefaultProviderPreference, ProviderPreference }
 // The normalizers live in shared/provider-preferences (also used by the server's
@@ -90,6 +91,19 @@ function composerFromProviderDefaults(
   providerDefaults: ChatProviderPreferences
 ): ComposerState {
   return composerStateForProvider(provider, providerDefaults[provider])
+}
+
+/** The provider and model the server last recorded for an existing chat. */
+export interface ComposerSeed {
+  provider: AgentProvider
+  model?: string
+}
+
+function composerFromChatSeed(seed: ComposerSeed, providerDefaults: ChatProviderPreferences): ComposerState {
+  return composerStateForProvider(seed.provider, {
+    ...providerDefaults[seed.provider],
+    ...(seed.model ? { model: seed.model } : {}),
+  })
 }
 
 function cloneComposerState(state: ComposerState): ComposerState {
@@ -178,13 +192,24 @@ function createComposerStateForNewChat(args: {
   return composerFromProviderDefaults(args.defaultProvider, args.providerDefaults)
 }
 
+function seedForChat(chatId: string): ComposerSeed | null {
+  if (chatId === NEW_CHAT_COMPOSER_ID) return null
+  const row = findSidebarChat(chatId)
+  if (!row?.provider) return null
+  return { provider: row.provider, ...(row.model ? { model: row.model } : {}) }
+}
+
 function getStoredComposerState(
   state: Pick<ChatPreferencesState, "chatStates" | "defaultProvider" | "providerDefaults" | "legacyComposerState">,
-  chatId: string
+  chatId: string,
+  seed: ComposerSeed | null = seedForChat(chatId)
 ): ComposerState {
   const existingState = state.chatStates[chatId]
   if (existingState) {
     return existingState
+  }
+  if (seed) {
+    return composerFromChatSeed(seed, state.providerDefaults)
   }
 
   return createComposerStateForNewChat({
@@ -228,7 +253,7 @@ interface ChatPreferencesState {
     modelOptions: Partial<ProviderModelOptionsByProvider[TProvider]>
   ) => void
   setProviderDefaultMode: (provider: AgentProvider, mode: ChatMode) => void
-  getComposerState: (chatId: string) => ComposerState
+  getComposerState: (chatId: string, seed?: ComposerSeed | null) => ComposerState
   initializeComposerForChat: (chatId: string, options?: { sourceState?: ComposerState | null }) => void
   setComposerState: (chatId: string, composerState: ComposerState) => void
   setChatComposerProvider: (chatId: string, provider: AgentProvider) => void
@@ -294,12 +319,10 @@ export const useChatPreferencesStore = create<ChatPreferencesState>()(
           providerDefaults,
           legacyComposerState: state.legacyComposerState,
         })
-        const chatStates = Object.fromEntries(
-          Object.entries(state.chatStates).map(([chatId, composerState]) => [
-            chatId,
-            sameComposerState(composerState, oldNewChatFallback) ? nextNewChatFallback : composerState,
-          ])
-        )
+        const newChatState = state.chatStates[NEW_CHAT_COMPOSER_ID]
+        const chatStates = newChatState && sameComposerState(newChatState, oldNewChatFallback)
+          ? { ...state.chatStates, [NEW_CHAT_COMPOSER_ID]: nextNewChatFallback }
+          : state.chatStates
 
         return {
           defaultProvider,
@@ -340,7 +363,7 @@ export const useChatPreferencesStore = create<ChatPreferencesState>()(
             },
           },
         })),
-      getComposerState: (chatId) => cloneComposerState(getStoredComposerState(get(), chatId)),
+      getComposerState: (chatId, seed) => cloneComposerState(getStoredComposerState(get(), chatId, seed)),
       initializeComposerForChat: (chatId, options) =>
         set((state) => {
           if (state.chatStates[chatId]) {

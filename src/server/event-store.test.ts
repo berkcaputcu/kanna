@@ -1611,3 +1611,40 @@ describe("getClientTranscript window and outline", () => {
     await rm(dataDir, { recursive: true, force: true })
   })
 })
+
+describe("stateVersion", () => {
+  test("does not bump for agent entries inside one activity bucket", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(join(dataDir, "project"))
+    const chat = await store.createChat(project.id)
+    const at = Date.now()
+
+    await store.appendMessage(chat.id, entry("user_prompt", at, { content: "hello" }))
+    const beforeAgentEntries = store.stateVersion
+    for (let index = 0; index < 20; index += 1) {
+      await store.appendMessage(chat.id, entry("assistant_text", at + 100 + index * 20, { content: "working" }))
+    }
+
+    expect(store.stateVersion - beforeAgentEntries).toBe(1)
+  })
+
+  test("still bumps when a sidebar-visible field moves", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+    const project = await store.openProject(join(dataDir, "project"))
+    const chat = await store.createChat(project.id)
+    const at = Date.now()
+
+    await store.appendMessage(chat.id, entry("user_prompt", at, { content: "first" }))
+    const afterFirstPrompt = store.stateVersion
+    await store.appendMessage(chat.id, entry("user_prompt", at + 1_000, { content: "second" }))
+    expect(store.stateVersion).toBeGreaterThan(afterFirstPrompt)
+
+    const afterSecondPrompt = store.stateVersion
+    await store.appendMessage(chat.id, entry("assistant_text", at + 40_000, { content: "done" }))
+    expect(store.stateVersion).toBeGreaterThan(afterSecondPrompt)
+  })
+})

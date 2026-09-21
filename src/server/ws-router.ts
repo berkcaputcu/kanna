@@ -941,7 +941,10 @@ export function createWsRouter({
       send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
     }
     if (changed) {
-      void broadcastSnapshots()
+      void broadcastFilteredSnapshots({
+        includeSidebar: true,
+        projectIds: new Set([project.id]),
+      })
     }
   }
 

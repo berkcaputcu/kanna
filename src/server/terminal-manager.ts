@@ -256,6 +256,8 @@ export class TerminalManager {
   private readonly sessions = new Map<string, TerminalSession>()
   private readonly listeners = new Set<(event: TerminalEvent) => void>()
 
+  constructor(private readonly options: { shell?: string } = {}) {}
+
   onEvent(listener: (event: TerminalEvent) => void) {
     this.listeners.add(listener)
     return () => {
@@ -314,7 +316,7 @@ export class TerminalManager {
       return this.snapshotOf(existing)
     }
 
-    const shell = resolveShell()
+    const shell = this.options.shell ?? resolveShell()
     const cols = normalizeTerminalDimension(args.cols, DEFAULT_COLS)
     const rows = normalizeTerminalDimension(args.rows, DEFAULT_ROWS)
     const scrollback = clampScrollback(args.scrollback)

@@ -71,7 +71,8 @@ export function applyModelToComposerState(state: ComposerState, model: string): 
 export function getEffectiveComposerState(
   composerState: ComposerState,
   activeProvider: AgentProvider | null,
-  providerDefaults: ChatProviderPreferences
+  providerDefaults: ChatProviderPreferences,
+  chatModel?: string
 ): ComposerState {
   if (!activeProvider || composerState.provider === activeProvider) {
     return composerState
@@ -81,7 +82,7 @@ export function getEffectiveComposerState(
     case "claude":
       return {
         provider: "claude",
-        model: providerDefaults.claude.model,
+        model: chatModel ?? providerDefaults.claude.model,
         modelOptions: { ...providerDefaults.claude.modelOptions },
         planMode: composerState.planMode,
         autoPlan: composerState.autoPlan,
@@ -89,7 +90,7 @@ export function getEffectiveComposerState(
     case "codex":
       return {
         provider: "codex",
-        model: providerDefaults.codex.model,
+        model: chatModel ?? providerDefaults.codex.model,
         modelOptions: { ...providerDefaults.codex.modelOptions },
         planMode: composerState.planMode,
         autoPlan: composerState.autoPlan,
@@ -97,7 +98,7 @@ export function getEffectiveComposerState(
     case "cursor":
       return {
         provider: "cursor",
-        model: providerDefaults.cursor.model,
+        model: chatModel ?? providerDefaults.cursor.model,
         modelOptions: { ...providerDefaults.cursor.modelOptions },
         planMode: composerState.planMode,
         autoPlan: composerState.autoPlan,
@@ -105,7 +106,7 @@ export function getEffectiveComposerState(
     case "pi":
       return {
         provider: "pi",
-        model: providerDefaults.pi.model,
+        model: chatModel ?? providerDefaults.pi.model,
         modelOptions: { ...providerDefaults.pi.modelOptions },
         planMode: composerState.planMode,
         autoPlan: composerState.autoPlan,
@@ -147,6 +148,8 @@ export function deriveComposerView(args: {
   providerDefaults: ChatProviderPreferences
   /** The user explicitly picked this chat's composer provider (vs. seeded state). */
   providerSwitchRequested?: boolean
+  /** The model the chat last ran with on its session provider, when known. */
+  chatModel?: string
 }): ComposerView {
   const composerChatId = args.chatId ?? NEW_CHAT_COMPOSER_ID
   const providerSwitchPending = Boolean(args.providerSwitchRequested)
@@ -157,7 +160,7 @@ export function deriveComposerView(args: {
   // provider — same fallback as before switching existed.
   const effectiveState = providerSwitchPending
     ? args.composerState
-    : getEffectiveComposerState(args.composerState, args.activeProvider, args.providerDefaults)
+    : getEffectiveComposerState(args.composerState, args.activeProvider, args.providerDefaults, args.chatModel)
   const selectedProvider = effectiveState.provider
   const providerConfig = args.availableProviders.find((provider) => provider.id === selectedProvider)
     ?? args.availableProviders[0]

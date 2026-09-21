@@ -68,7 +68,9 @@ async function waitFor(check: () => boolean, timeoutMs: number, intervalMs = 25)
 }
 
 async function createSession(terminalId: string) {
-  const manager = new TerminalManager()
+  // Terminal behavior should not depend on the host's login shell or its
+  // startup files. Shell selection itself is still covered by production use.
+  const manager = new TerminalManager({ shell: "/bin/bash" })
   let output = ""
   manager.onEvent((event) => {
     if (event.type === "terminal.output" && event.terminalId === terminalId) {

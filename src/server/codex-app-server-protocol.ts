@@ -153,12 +153,19 @@ export interface ThreadStartResponse {
 export type ThreadResumeResponse = ThreadStartResponse
 export type ThreadForkResponse = ThreadStartResponse
 
+/** Codex sends simple causes as strings and stream failures as tagged objects. */
+export type CodexErrorInfo = string | Record<string, { httpStatusCode?: number | null } | null | undefined>
+
+export interface CodexError {
+  message?: string
+  codexErrorInfo?: CodexErrorInfo | null
+  additionalDetails?: unknown
+}
+
 export interface TurnSummary {
   id: string
   status: "inProgress" | "completed" | "failed" | "interrupted"
-  error: {
-    message?: string
-  } | null
+  error: CodexError | null
 }
 
 export interface TurnStartResponse {
@@ -555,11 +562,7 @@ export interface ItemCompletedNotification {
 }
 
 export interface ErrorNotification {
-  error: {
-    message: string
-    codexErrorInfo?: string
-    additionalDetails?: unknown
-  }
+  error: CodexError
   willRetry: boolean
   threadId?: string
   turnId?: string

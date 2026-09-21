@@ -21,6 +21,7 @@ import {
   type AccountRateLimitsUpdatedNotification,
   type CollabAgentToolCallItem,
   type ContextCompactedNotification,
+  type CodexError,
   type CodexRateLimitSnapshot,
   type CodexRequestId,
   type GetAccountRateLimitsResponse,
@@ -31,6 +32,7 @@ import {
   type CommandExecutionRequestApprovalResponse,
   type DynamicToolCallOutputContentItem,
   type DynamicToolCallResponse,
+  type ErrorNotification,
   type FileChangeApprovalDecision,
   type FileChangeRequestApprovalParams,
   type FileChangeRequestApprovalResponse,
@@ -104,6 +106,8 @@ interface PendingTurn {
   planTextByItemId: Map<string, string>
   todoSequence: number
   pendingWebSearchResultToolId: string | null
+  /** Most informative error from this turn's retry sequence, if any. */
+  retryCause: CodexError | null
   resolved: boolean
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   onApprovalRequest?: (
@@ -198,6 +202,32 @@ function codexSystemInitEntry(model: string): TranscriptEntry {
 function errorMessage(value: unknown): string {
   if (value instanceof Error) return value.message
   return String(value)
+}
+
+function errorDetail(error: CodexError): string {
+  const info = error.codexErrorInfo
+  if (typeof info === "string") return info.trim()
+  if (!info || typeof info !== "object") return ""
+  const [kind, value] = Object.entries(info)[0] ?? []
+  if (!kind) return ""
+  const status = value && typeof value === "object" && typeof value.httpStatusCode === "number"
+    ? ` (HTTP ${value.httpStatusCode})`
+    : ""
+  return `${kind}${status}`
+}
+
+function formatCodexError(error: CodexError | null | undefined): string {
+  if (!error) return ""
+  const message = error.message?.trim() ?? ""
+  const detail = errorDetail(error)
+  if (!detail || message.includes(detail)) return message
+  return message ? `${message}: ${detail}` : detail
+}
+
+function preferredRetryCause(current: CodexError | null, next: CodexError): CodexError {
+  if (!current) return next
+  if (errorDetail(next) && !errorDetail(current)) return next
+  return current
 }
 
 function parseJsonLine(line: string): unknown | null {
@@ -937,6 +967,7 @@ export class CodexAppServerManager {
       planTextByItemId: new Map(),
       todoSequence: 0,
       pendingWebSearchResultToolId: null,
+      retryCause: null,
       resolved: false,
       onToolRequest: args.onToolRequest,
       onApprovalRequest: args.onApprovalRequest,
@@ -1080,7 +1111,7 @@ export class CodexAppServerManager {
   stopSession(chatId: string) {
     const context = this.sessions.get(chatId)
     if (!context) return
-    context.closed = true
+    this.failContext(context, "Codex session closed")
     context.pendingTurn?.queue.finish()
     context.approvalTurns.clear()
     this.sessions.delete(chatId)
@@ -1167,7 +1198,7 @@ export class CodexAppServerManager {
     void (async () => {
       for await (const line of stderr) {
         if (line.trim()) {
-          context.stderrLines.push(line.trim())
+          context.stderrLines = [line.trim().slice(-8192)]
         }
       }
     })()
@@ -1500,7 +1531,7 @@ export class CodexAppServerManager {
         this.handleContextCompacted(pendingTurn, notification.params)
         return
       case "error":
-        this.failContext(context, notification.params.error.message)
+        this.handleErrorNotification(context, notification.params)
         return
       default:
         return
@@ -1693,11 +1724,32 @@ export class CodexAppServerManager {
         subtype: isCancelled ? "cancelled" : isError ? "error" : "success",
         isError,
         durationMs: Math.max(0, Date.now() - pendingTurn.startedAt),
-        result: notification.turn.error?.message ?? "",
+        result: isError
+          ? formatCodexError(notification.turn.error)
+            || formatCodexError(pendingTurn.retryCause)
+            || "Codex turn failed"
+          : formatCodexError(notification.turn.error),
       }),
     })
     pendingTurn.queue.finish()
     context.pendingTurn = null
+  }
+
+  /** Keep retryable stream failures alive and show terminal failures as errors. */
+  private handleErrorNotification(context: SessionContext, notification: ErrorNotification) {
+    const message = formatCodexError(notification.error) || "Codex reported an error"
+    if (!notification.willRetry) {
+      this.failContext(context, message)
+      return
+    }
+
+    const pendingTurn = context.pendingTurn
+    if (!pendingTurn || pendingTurn.resolved) return
+    pendingTurn.retryCause = preferredRetryCause(pendingTurn.retryCause, notification.error)
+    pendingTurn.queue.push({
+      type: "transcript",
+      entry: timestamped({ kind: "status", status: message }),
+    })
   }
 
   private failContext(context: SessionContext, message: string) {
@@ -1723,6 +1775,7 @@ export class CodexAppServerManager {
     context.pendingRequests.clear()
     context.approvalTurns.clear()
     context.closed = true
+    if (this.sessions.get(context.chatId) === context) this.sessions.delete(context.chatId)
   }
 
   private async sendRequest<TResult>(context: SessionContext, method: string, params: unknown): Promise<TResult> {

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import { homedir } from "node:os"
 import path from "node:path"
 import type { AgentProvider, GlobalSkillSummary, HarnessSkill, HarnessSkillSource } from "../shared/types"
@@ -186,26 +187,28 @@ export function dedupeSkillsByName(skills: HarnessSkill[]): HarnessSkill[] {
 
 /** Walk from `cwd` up to the enclosing git repo root (inclusive), or just `cwd` when not in a repo. */
 export function collectAncestorDirsToRepoRoot(cwd: string): string[] {
-  const dirs: string[] = []
   let dir = path.resolve(cwd)
-  let repoRoot: string | null = null
-  for (let probe = dir; ; ) {
-    if (existsSync(path.join(probe, ".git"))) {
-      repoRoot = probe
-      break
-    }
-    const parent = path.dirname(probe)
-    if (parent === probe) break
-    probe = parent
+  let repoRoot: string | null
+  try {
+    repoRoot = path.resolve(execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim())
+  } catch {
+    repoRoot = null
   }
+
+  if (!repoRoot) return [dir]
+
+  const dirs: string[] = []
   while (true) {
     dirs.push(dir)
-    if (repoRoot === null || dir === repoRoot) break
+    if (dir === repoRoot) break
     const parent = path.dirname(dir)
     if (parent === dir) break
     dir = parent
   }
-  return repoRoot === null ? [path.resolve(cwd)] : dirs
+  return dirs
 }
 
 const WALK_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "out", ".next", "vendor", ".venv", "target"])

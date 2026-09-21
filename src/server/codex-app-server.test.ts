@@ -2272,6 +2272,41 @@ describe("CodexAppServerManager", () => {
     expect(resultEvent?.entry.result).toContain("fatal: app-server crashed")
   })
 
+  test("ends a pending turn when its session is closed", async () => {
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") {
+        child.writeServerMessage({ id: message.id, result: { userAgent: "codex-test" } })
+      } else if (message.method === "thread/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { thread: { id: "thread-1" }, model: "gpt-5.4", reasoningEffort: "high" },
+        })
+      } else if (message.method === "turn/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { turn: { id: "turn-1", status: "inProgress", error: null } },
+        })
+      }
+    })
+
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    await manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
+    const turn = await manager.startTurn({
+      chatId: "chat-1",
+      model: "gpt-5.4",
+      content: "close me",
+      planMode: false,
+      onToolRequest: async () => ({}),
+    })
+
+    manager.stopSession("chat-1")
+
+    const events = await collectStream(turn.stream)
+    const resultEvent = events.find((event) => event.type === "transcript" && event.entry.kind === "result")
+    expect(resultEvent?.entry.subtype).toBe("error")
+    expect(resultEvent?.entry.result).toBe("Codex session closed")
+  })
+
   test("maps approval mode and bridges command approvals", async () => {
     const process = new FakeCodexProcess((message, child) => {
       if (message.method === "initialize") {
@@ -2401,5 +2436,109 @@ describe("CodexAppServerManager", () => {
       sandbox: "workspace-write",
     })
     expect(turnStart.params).toMatchObject({ approvalPolicy: "on-request", approvalsReviewer: "auto_review" })
+  })
+
+  test("keeps a turn alive through a retryable stream error", async () => {
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") {
+        child.writeServerMessage({ id: message.id, result: { userAgent: "codex-test" } })
+      } else if (message.method === "thread/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { thread: { id: "thread-1" }, model: "gpt-5.4", reasoningEffort: "high" },
+        })
+      } else if (message.method === "turn/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { turn: { id: "turn-1", status: "inProgress", error: null } },
+        })
+        child.writeServerMessage({
+          method: "error",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            willRetry: true,
+            error: { message: "Reconnecting... 2/5" },
+          },
+        })
+        child.writeServerMessage({
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: { id: "item-1", type: "agentMessage", text: "recovered" },
+          },
+        })
+        child.writeServerMessage({
+          method: "turn/completed",
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", error: null } },
+        })
+      }
+    })
+
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    await manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
+    const turn = await manager.startTurn({
+      chatId: "chat-1",
+      model: "gpt-5.4",
+      content: "keep going",
+      planMode: false,
+      onToolRequest: async () => ({}),
+    })
+
+    const entries = (await collectStream(turn.stream))
+      .filter((event) => event.type === "transcript")
+      .map((event) => event.entry)
+    expect(entries.find((entry) => entry.kind === "status")?.status).toBe("Reconnecting... 2/5")
+    expect(entries.find((entry) => entry.kind === "assistant_text")?.text).toBe("recovered")
+    expect(entries.find((entry) => entry.kind === "result")?.subtype).toBe("success")
+  })
+
+  test("keeps the detailed retry cause when later notices are bare counters", async () => {
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") {
+        child.writeServerMessage({ id: message.id, result: { userAgent: "codex-test" } })
+      } else if (message.method === "thread/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { thread: { id: "thread-1" }, model: "gpt-5.4", reasoningEffort: "high" },
+        })
+      } else if (message.method === "turn/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { turn: { id: "turn-1", status: "inProgress", error: null } },
+        })
+        for (const error of [
+          { message: "Reconnecting... 2/5" },
+          { message: "stream disconnected", codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } } },
+          { message: "Reconnecting... 3/5" },
+        ]) {
+          child.writeServerMessage({
+            method: "error",
+            params: { threadId: "thread-1", turnId: "turn-1", willRetry: true, error },
+          })
+        }
+        child.writeServerMessage({
+          method: "turn/completed",
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "failed", error: null } },
+        })
+      }
+    })
+
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    await manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
+    const turn = await manager.startTurn({
+      chatId: "chat-1",
+      model: "gpt-5.4",
+      content: "keep going",
+      planMode: false,
+      onToolRequest: async () => ({}),
+    })
+
+    const entries = (await collectStream(turn.stream))
+      .filter((event) => event.type === "transcript")
+      .map((event) => event.entry)
+    expect(entries.find((entry) => entry.kind === "result")?.result)
+      .toBe("stream disconnected: responseStreamDisconnected (HTTP 502)")
   })
 })
