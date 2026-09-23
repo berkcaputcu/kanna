@@ -42,6 +42,7 @@ import {
   buildKannaAttributionSystemMessage,
 } from "./attribution"
 import {
+  applyCodexModels,
   applyClaudeSdkModels,
   applyCursorModels,
   type ClaudeSdkModelInfo,
@@ -890,6 +891,7 @@ export class AgentCoordinator {
   private reportBackgroundError: ((message: string) => void) | null = null
   private onClaudeRateLimit: ((info: ClaudeRateLimitInfoRaw) => void) | null = null
   private cursorModelCatalogApplied = false
+  private codexModelCatalogRefresh: Promise<void> | null = null
   readonly activeTurns = new Map<string, ActiveTurn>()
   /**
    * Codex can deliver an approval request just after its completion event.
@@ -1024,6 +1026,24 @@ export class AgentCoordinator {
     }
   }
 
+  /** Refresh Codex's account-specific model list; failures keep the fallback. */
+  refreshCodexModelCatalog(): Promise<void> {
+    if (this.codexModelCatalogRefresh) return this.codexModelCatalogRefresh
+    this.codexModelCatalogRefresh = (async () => {
+      try {
+        const models = await this.codexManager.listModels(homedir())
+        if (models && applyCodexModels(models)) {
+          this.emitStateChange(undefined, { immediate: true })
+        }
+      } catch {
+        // Keep the static fallback when Codex is signed out or too old.
+      } finally {
+        this.codexModelCatalogRefresh = null
+      }
+    })()
+    return this.codexModelCatalogRefresh
+  }
+
 
   async stopDraining(chatId: string) {
     const draining = this.drainingStreams.get(chatId)
@@ -1096,7 +1116,12 @@ export class AgentCoordinator {
     }
 
     const model = normalizeServerModel(provider, options.model)
-    const modelOptions = normalizeCodexModelOptions(model, options.modelOptions, options.effort)
+    const modelOptions = normalizeCodexModelOptions(
+      model,
+      options.modelOptions,
+      options.effort,
+      catalog.models.find((option) => option.id === model),
+    )
     return {
       model,
       effort: modelOptions.reasoningEffort,
@@ -1530,6 +1555,9 @@ export class AgentCoordinator {
       if (chat.pendingForkSessionToken && started?.sessionToken) {
         await this.store.setPendingForkSessionToken(args.chatId, null)
       }
+      // The new app-server session can answer the account model request; keep
+      // catalog refresh out of turn startup and retry on each Codex turn.
+      void this.refreshCodexModelCatalog()
       turn = await this.codexManager.startTurn({
         chatId: args.chatId,
         content: buildPromptText(wireContent, args.attachments),

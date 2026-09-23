@@ -22,6 +22,7 @@ import {
   type CollabAgentToolCallItem,
   type ContextCompactedNotification,
   type CodexError,
+  type CodexModelSummary,
   type CodexRateLimitSnapshot,
   type CodexRequestId,
   type GetAccountRateLimitsResponse,
@@ -40,6 +41,8 @@ import {
   type ItemCompletedNotification,
   type ItemStartedNotification,
   type JsonRpcResponse,
+  type ModelListParams,
+  type ModelListResponse,
   type McpToolCallItem,
   type McpServerElicitationRequestParams,
   type McpServerElicitationRequestResponse,
@@ -795,10 +798,44 @@ export class CodexAppServerManager {
         {},
       )
     }
-    return await this.probeAccountRateLimits(probeCwd)
+    return await this.withProbe(probeCwd, (context) =>
+      this.sendRequest<GetAccountRateLimitsResponse>(context, "account/rateLimits/read", {}))
   }
 
-  private async probeAccountRateLimits(cwd: string): Promise<GetAccountRateLimitsResponse | null> {
+  /**
+   * List models available to the signed-in Codex account. Reuses a live
+   * session when possible; otherwise starts a short-lived app-server probe.
+   * Older Codex versions may reject `model/list`; callers keep the fallback.
+   */
+  async listModels(probeCwd: string): Promise<CodexModelSummary[] | null> {
+    for (const context of this.sessions.values()) {
+      if (context.closed) continue
+      return await this.requestModelList(context)
+    }
+    return await this.withProbe(probeCwd, (context) => this.requestModelList(context))
+  }
+
+  private async requestModelList(context: SessionContext): Promise<CodexModelSummary[]> {
+    const models: CodexModelSummary[] = []
+    const seenCursors = new Set<string>()
+    let cursor: string | null | undefined
+    do {
+      if (cursor) {
+        if (seenCursors.has(cursor)) throw new Error("Codex model list repeated a pagination cursor")
+        seenCursors.add(cursor)
+      }
+      const response = await this.sendRequest<ModelListResponse>(
+        context,
+        "model/list",
+        (cursor ? { cursor } : {}) satisfies ModelListParams,
+      )
+      models.push(...(response.data ?? []).filter((model) => !model.hidden))
+      cursor = response.nextCursor
+    } while (cursor)
+    return models
+  }
+
+  private async withProbe<TResult>(cwd: string, run: (context: SessionContext) => Promise<TResult>): Promise<TResult | null> {
     let child: CodexAppServerProcess
     try {
       child = this.spawnProcess(cwd)
@@ -806,7 +843,7 @@ export class CodexAppServerManager {
       return null
     }
     const context: SessionContext = {
-      chatId: `usage-probe-${randomUUID()}`,
+      chatId: `account-probe-${randomUUID()}`,
       cwd,
       child,
       pendingRequests: new Map(),
@@ -827,11 +864,7 @@ export class CodexAppServerManager {
         },
       } satisfies InitializeParams)
       this.writeMessage(context, { method: "initialized" })
-      return await this.sendRequest<GetAccountRateLimitsResponse>(
-        context,
-        "account/rateLimits/read",
-        {},
-      )
+      return await run(context)
     } finally {
       context.closed = true
       try {

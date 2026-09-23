@@ -60,7 +60,7 @@ interface AppSettingsFile {
 }
 
 // devbox is a server-runtime fact (the --cloud flag), not settings state.
-type AppSettingsState = Omit<AppSettingsSnapshot, "devbox">
+type AppSettingsState = Omit<AppSettingsSnapshot, "devbox" | "availableProviders">
 
 interface NormalizedAppSettings {
   payload: AppSettingsState

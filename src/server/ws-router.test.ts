@@ -6,6 +6,7 @@ import type { AppSettingsSnapshot, KeybindingsSnapshot, LlmProviderSnapshot } fr
 import { PROTOCOL_VERSION } from "../shared/types"
 import { findTranscriptWindowStart } from "../shared/transcript-window"
 import { createEmptyState } from "./events"
+import { SERVER_PROVIDERS } from "./provider-catalog"
 import {
   assertSafeSkillId,
   assertSafeSkillSource,
@@ -77,6 +78,7 @@ const DEFAULT_KEYBINDINGS_SNAPSHOT: KeybindingsSnapshot = {
 const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
   appName: "Kanna",
   devbox: false,
+  availableProviders: SERVER_PROVIDERS,
   gitAttributionEnabled: false,
   browserSettingsMigrated: false,
   setupShown: false,

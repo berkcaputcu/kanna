@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from "react"
 import { Box, Brain, Gauge, ListTodo, LockOpen, Plus, Search, ShieldCheck, Sparkles, SquareMenu, SquareMinus } from "lucide-react"
 import {
   resolveModelLabel,
+  normalizeCodexReasoningEffort,
   type AgentProvider,
   type ChatMode,
   type ClaudeContextWindow,
@@ -252,6 +253,23 @@ export function ChatPreferenceControls({
   const ProviderIcon = PROVIDER_ICONS[selectedProvider]
   const ModelIcon = Box
   const codexModelOptions = selectedProvider === "codex" ? modelOptions as CodexModelOptions : null
+  const matchedModelOption = providerConfig?.models.find((candidate) =>
+    candidate.id === model || candidate.aliases?.includes(model)
+  )
+  const modelOption = matchedModelOption
+    ?? providerConfig?.models.find((candidate) => candidate.id === providerConfig.defaultModel)
+  const displayedModel = matchedModelOption?.id ?? providerConfig?.defaultModel ?? model
+  const displayedCodexModelOptions = codexModelOptions
+    ? {
+      ...codexModelOptions,
+      reasoningEffort: normalizeCodexReasoningEffort(
+        displayedModel,
+        codexModelOptions.reasoningEffort,
+        modelOption,
+      ),
+    }
+    : null
+  const displayedModelOptions = displayedCodexModelOptions ?? modelOptions
   // Central availability registry (shared with the command palette): which
   // option controls exist for this provider/model and their current values.
   // Only `provider` and `model`/`modelOptions` feed the non-mode controls; the
@@ -259,8 +277,8 @@ export function ChatPreferenceControls({
   const controls = deriveComposerOptionControls(
     {
       provider: selectedProvider,
-      model,
-      modelOptions,
+      model: displayedModel,
+      modelOptions: displayedModelOptions,
       planMode: mode === "plan",
       autoPlan: mode === "auto-plan",
     } as ComposerState,
@@ -317,20 +335,20 @@ export function ChatPreferenceControls({
         trigger={(
           <>
             <ModelIcon className="h-3.5 w-3.5" />
-            <span>{resolveModelLabel(providerConfig.models, model)}</span>
+            <span>{resolveModelLabel(providerConfig.models, displayedModel)}</span>
           </>
         )}
       >
         {(close) => (
           <ModelPickerList
             models={providerConfig.models}
-            selectedModel={model}
+            selectedModel={displayedModel}
             onSelect={(modelId) => {
               onModelChange(selectedProvider, modelId)
               close()
             }}
             renderLabel={(candidate) =>
-              candidate.id === "gpt-5.6-luna" && codexModelOptions?.reasoningEffort === "ultra" ? (
+              candidate.id === "gpt-5.6-luna" && displayedCodexModelOptions?.reasoningEffort === "ultra" ? (
                 <>
                   {candidate.label}{" "}
                   <span className="text-xs font-normal text-muted-foreground">Ultra → Max</span>

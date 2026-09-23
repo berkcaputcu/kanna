@@ -39,15 +39,20 @@ import { NEW_CHAT_COMPOSER_ID, type ComposerState } from "../stores/chatPreferen
  */
 
 /** Applies a model change to a composer state, normalizing dependent options. */
-export function applyModelToComposerState(state: ComposerState, model: string): ComposerState {
+export function applyModelToComposerState(
+  state: ComposerState,
+  model: string,
+  providerConfig?: ProviderCatalogEntry,
+): ComposerState {
   if (state.provider === "codex") {
-    const normalizedModel = normalizeCodexModelId(model)
+    const modelOption = providerConfig?.models.find((candidate) => candidate.id === model || candidate.aliases?.includes(model))
+    const normalizedModel = modelOption?.id ?? normalizeCodexModelId(model)
     return {
       ...state,
       model: normalizedModel,
       modelOptions: {
         ...state.modelOptions,
-        reasoningEffort: normalizeCodexReasoningEffort(normalizedModel, state.modelOptions.reasoningEffort),
+        reasoningEffort: normalizeCodexReasoningEffort(normalizedModel, state.modelOptions.reasoningEffort, modelOption),
       },
     }
   }
@@ -164,6 +169,25 @@ export function deriveComposerView(args: {
   const selectedProvider = effectiveState.provider
   const providerConfig = args.availableProviders.find((provider) => provider.id === selectedProvider)
     ?? args.availableProviders[0]
+  let catalogState = effectiveState
+  if (effectiveState.provider === "codex" && providerConfig?.id === "codex") {
+    const modelOption = providerConfig.models.find((candidate) =>
+      candidate.id === effectiveState.model || candidate.aliases?.includes(effectiveState.model)
+    )
+    const model = modelOption?.id ?? providerConfig.defaultModel
+    catalogState = {
+      ...effectiveState,
+      model,
+      modelOptions: {
+        ...effectiveState.modelOptions,
+        reasoningEffort: normalizeCodexReasoningEffort(
+          model,
+          effectiveState.modelOptions.reasoningEffort,
+          modelOption,
+        ),
+      },
+    }
+  }
 
   return {
     composerChatId,
@@ -171,7 +195,7 @@ export function deriveComposerView(args: {
     providerSwitchPending,
     canChangeProvider: true,
     selectedProvider,
-    effectiveState,
+    effectiveState: catalogState,
     providerConfig,
     models: providerConfig?.models ?? [],
     supportsPlanMode: providerConfig?.supportsPlanMode ?? false,
@@ -233,6 +257,7 @@ export function deriveComposerOptionControls(
   }
 
   const reasoning = state.provider === "cursor"
+    || (state.provider === "codex" && selectedModelOption?.supportsEffort === false)
     ? null
     : {
       options: (
@@ -243,7 +268,7 @@ export function deriveComposerOptionControls(
           }))
           : state.provider === "pi"
             ? [...PI_REASONING_OPTIONS]
-            : [...getCodexReasoningOptions(state.model)]
+            : [...getCodexReasoningOptions(state.model, selectedModelOption)]
       ) as ComposerOptionChoice[],
       selectedId: modelOptions.reasoningEffort,
     }

@@ -41,3 +41,6 @@ _Avoid_: Automatic sync, blind port
 **Optional upstream feature**:
 An upstream product capability that is not required for this fork to work and must be reviewed for personal usefulness before implementation.
 _Avoid_: Required upgrade, free feature
+
+**Codex model**:
+A model Kanna can select through its Codex provider. Availability depends on the signed-in Codex account.

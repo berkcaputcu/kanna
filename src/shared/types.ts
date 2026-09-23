@@ -357,6 +357,8 @@ const LEGACY_CODEX_REASONING_OPTIONS = [
 
 const GPT_5_6_REASONING_OPTIONS = [...CODEX_REASONING_OPTIONS]
 const GPT_5_6_LUNA_REASONING_OPTIONS = CODEX_REASONING_OPTIONS.filter((option) => option.id !== "ultra")
+const GPT_6_REASONING_OPTIONS = [...CODEX_REASONING_OPTIONS]
+const GPT_6_LUNA_REASONING_OPTIONS = CODEX_REASONING_OPTIONS.filter((option) => option.id !== "ultra")
 
 export const CLAUDE_CONTEXT_WINDOW_OPTIONS = [
   { id: "1m", label: "1M" },
@@ -537,11 +539,35 @@ export const PROVIDERS: ProviderCatalogEntry[] = [
   {
     id: "codex",
     label: "Codex",
-    defaultModel: "gpt-5.6-sol",
+    defaultModel: "gpt-6-luna",
     defaultEffort: "medium",
     supportsPlanMode: true,
     supportsAutoPlanMode: false,
     models: [
+      {
+        id: "gpt-6-astra",
+        label: "GPT-6 Astra",
+        supportsEffort: true,
+        supportedReasoningEfforts: GPT_6_REASONING_OPTIONS,
+        defaultReasoningEffort: "low",
+        supportsFastMode: true,
+      },
+      {
+        id: "gpt-6-sol",
+        label: "GPT-6 Sol",
+        supportsEffort: true,
+        supportedReasoningEfforts: GPT_6_REASONING_OPTIONS,
+        defaultReasoningEffort: "medium",
+        supportsFastMode: true,
+      },
+      {
+        id: "gpt-6-luna",
+        label: "GPT-6 Luna",
+        supportsEffort: true,
+        supportedReasoningEfforts: GPT_6_LUNA_REASONING_OPTIONS,
+        defaultReasoningEffort: "medium",
+        supportsFastMode: true,
+      },
       {
         id: "gpt-5.6-sol",
         label: "GPT-5.6 Sol",
@@ -590,7 +616,7 @@ export const PROVIDERS: ProviderCatalogEntry[] = [
         aliases: ["gpt-5-codex"],
         supportedReasoningEfforts: LEGACY_CODEX_REASONING_OPTIONS,
         defaultReasoningEffort: "high",
-        // Fast mode supports GPT-5.6/5.5/5.4 only (docs: /codex/speed).
+        // GPT-6 and GPT-5.6/5.5/5.4 support Fast, not GPT-5.3 Codex or Spark.
         supportsFastMode: false,
       },
       {
@@ -673,6 +699,12 @@ export function normalizeProviderModelId(
   }
   const match = getProviderModelMatch(provider, modelId)
   if (match) return match.id
+  if (provider === "codex" && modelId) {
+    // Codex's live model/list catalog may contain ids unknown to this static
+    // fallback. The server validates against the account catalog before a turn.
+    const trimmed = modelId.trim()
+    if (trimmed) return trimmed
+  }
   if (provider === "claude" && modelId) {
     // Claude catalog ids are family aliases; persisted version-pinned ids from
     // older Kanna versions ("claude-opus-4-8", "claude-haiku-4-5-20251001")
@@ -692,7 +724,7 @@ export function normalizeClaudeModelId(modelId?: string, fallbackModelId = "opus
   return normalizeProviderModelId("claude", modelId, fallbackModelId)
 }
 
-export function normalizeCodexModelId(modelId?: string, fallbackModelId = "gpt-5.6-sol"): string {
+export function normalizeCodexModelId(modelId?: string, fallbackModelId = "gpt-6-luna"): string {
   return normalizeProviderModelId("codex", modelId, fallbackModelId)
 }
 
@@ -721,16 +753,20 @@ export function getCodexModelOption(modelId: string): ProviderModelOption | unde
   return getProviderModelOption("codex", modelId)
 }
 
-export function getCodexReasoningOptions(modelId: string): readonly CodexReasoningEffortOption[] {
-  return getCodexModelOption(modelId)?.supportedReasoningEfforts ?? CODEX_REASONING_OPTIONS
+export function getCodexReasoningOptions(
+  modelId: string,
+  modelOption?: ProviderModelOption,
+): readonly CodexReasoningEffortOption[] {
+  return modelOption?.supportedReasoningEfforts ?? getCodexModelOption(modelId)?.supportedReasoningEfforts ?? CODEX_REASONING_OPTIONS
 }
 
 export function normalizeCodexReasoningEffort(
   modelId: string,
   effort?: unknown,
+  modelOption?: ProviderModelOption,
 ): CodexReasoningEffort {
   const normalizedModel = normalizeCodexModelId(modelId)
-  const model = getCodexModelOption(normalizedModel)
+  const model = modelOption?.id === normalizedModel ? modelOption : getCodexModelOption(normalizedModel)
   const supported = model?.supportedReasoningEfforts ?? CODEX_REASONING_OPTIONS
 
   if (effort === "minimal" && normalizedModel.startsWith("gpt-5.6-")) {
@@ -743,7 +779,10 @@ export function normalizeCodexReasoningEffort(
     return effort
   }
 
-  return model?.defaultReasoningEffort ?? DEFAULT_CODEX_MODEL_OPTIONS.reasoningEffort
+  if (model?.defaultReasoningEffort && supported.some((option) => option.id === model.defaultReasoningEffort)) {
+    return model.defaultReasoningEffort
+  }
+  return DEFAULT_CODEX_MODEL_OPTIONS.reasoningEffort
 }
 
 export function supportsClaudeMaxReasoningEffort(modelId: string): boolean {
@@ -1050,6 +1089,8 @@ export interface GitHubRecentReposResult {
 }
 
 export interface AppSettingsSnapshot {
+  /** Runtime model catalogs, exposed here for new-chat and settings pickers. */
+  availableProviders?: ProviderCatalogEntry[]
   /** Display name shown beside the logo and used as the browser title prefix. */
   appName: string
   /** Add Kanna attribution to agent instructions, pull requests, and Git sidebar commits. */

@@ -28,6 +28,32 @@ export interface InitializeParams {
   }
 }
 
+/** `model/list` (Codex app-server versions that support account model discovery). */
+export interface ModelListParams {
+  cursor?: string | null
+  limit?: number | null
+  includeHidden?: boolean | null
+}
+
+export interface CodexModelSummary {
+  id: string
+  /** Model id accepted by thread/start and turn/start. */
+  model: string
+  displayName: string
+  description: string
+  hidden: boolean
+  isDefault: boolean
+  defaultReasoningEffort: string
+  supportedReasoningEfforts: { reasoningEffort: string; description: string }[]
+  serviceTiers?: { id: string; name: string; description: string }[]
+  additionalSpeedTiers?: string[]
+}
+
+export interface ModelListResponse {
+  data: CodexModelSummary[]
+  nextCursor?: string | null
+}
+
 export interface ThreadStartParams {
   model?: string | null
   cwd?: string | null

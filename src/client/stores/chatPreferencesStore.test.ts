@@ -251,9 +251,9 @@ describe("migrateChatPreferencesState", () => {
 })
 
 describe("chat preference store", () => {
-  test("starts with GPT-5.6 Sol and Medium as the default Codex configuration", () => {
+  test("starts with GPT-6 Luna and Medium as the default Codex configuration", () => {
     expect(INITIAL_STATE.providerDefaults.codex).toEqual({
-      model: "gpt-5.6-sol",
+      model: "gpt-6-luna",
       modelOptions: { reasoningEffort: "medium", fastMode: false },
       planMode: false,
       autoPlan: false,

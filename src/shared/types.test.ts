@@ -58,12 +58,12 @@ describe("shared model normalization", () => {
   })
 
   test("normalizes legacy Codex aliases and defaults to the latest catalog model", () => {
-    expect(normalizeCodexModelId()).toBe("gpt-5.6-sol")
+    expect(normalizeCodexModelId()).toBe("gpt-6-luna")
     expect(normalizeCodexModelId("gpt-5.6")).toBe("gpt-5.6-sol")
     expect(normalizeCodexModelId("gpt-5.6-terra")).toBe("gpt-5.6-terra")
     expect(normalizeCodexModelId("gpt-5.6-luna")).toBe("gpt-5.6-luna")
     expect(normalizeCodexModelId("gpt-5-codex")).toBe("gpt-5.3-codex")
-    expect(normalizeCodexModelId("not-a-real-model")).toBe("gpt-5.6-sol")
+    expect(normalizeCodexModelId("not-a-real-model")).toBe("not-a-real-model")
   })
 
   test("exposes model-specific GPT-5.6 reasoning efforts", () => {

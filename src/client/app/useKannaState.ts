@@ -600,7 +600,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     () => withPiFaveModels(PROVIDERS, llmProvider?.faveModels ?? []),
     [llmProvider?.faveModels]
   )
-  const availableProviders = activeChatSnapshot?.availableProviders ?? fallbackProviders
+  const availableProviders = activeChatSnapshot?.availableProviders ?? appSettings?.availableProviders ?? fallbackProviders
   const isProcessing = isProcessingStatus(effectiveRuntimeStatus ?? undefined)
 
   // Written after a turn settles, not during: the window changes many times a

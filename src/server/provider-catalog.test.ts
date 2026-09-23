@@ -222,7 +222,7 @@ describe("provider catalog normalization", () => {
   })
 
   test("normalizes server model ids through the shared alias catalog", () => {
-    expect(normalizeServerModel("codex")).toBe("gpt-5.6-sol")
+    expect(normalizeServerModel("codex")).toBe("gpt-6-luna")
     expect(normalizeServerModel("claude", "fable")).toBe("fable")
     expect(normalizeServerModel("claude", "opus")).toBe("opus")
     // Version-pinned ids persisted by older Kanna versions fold into the alias.

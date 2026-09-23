@@ -13,7 +13,7 @@ import { KeybindingsManager } from "./keybindings"
 import { killLocalHttpServer, listLocalHttpServers } from "./local-http-servers"
 import { cloneRepository, createDirectory, ensureProjectDirectory, initializeProjectDirectory, listDirectory, resolveClonePath } from "./paths"
 import { listRecentGitHubRepos } from "./github"
-import { applyPiFaveModels } from "./provider-catalog"
+import { applyPiFaveModels, SERVER_PROVIDERS } from "./provider-catalog"
 import { readProjectQuickActions, writeProjectQuickActions } from "./project-quick-actions"
 import { installSkill, listGlobalSkillsWithSources, listInstalledSkills, searchSkills, uninstallSkill } from "./skills"
 import { TerminalManager } from "./terminal-manager"
@@ -181,6 +181,12 @@ export function createWsRouter({
   providerAuth,
 }: CreateWsRouterArgs) {
   const sockets = new Set<ServerWebSocket<ClientState>>()
+  function getAppSettingsSnapshot() {
+    return {
+      ...appSettings.getSnapshot(),
+      availableProviders: structuredClone(SERVER_PROVIDERS),
+    }
+  }
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | null = null
   let pendingBroadcastAll = false
   const pendingBroadcastChatIds = new Set<string>()
@@ -403,7 +409,7 @@ export function createWsRouter({
         id,
         snapshot: {
           type: "app-settings",
-          data: appSettings.getSnapshot(),
+          data: getAppSettingsSnapshot(),
         },
       }
     }
@@ -1008,7 +1014,7 @@ export function createWsRouter({
           return
         }
         case "settings.readAppSettings": {
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: appSettings.getSnapshot() })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: getAppSettingsSnapshot() })
           return
         }
         case "usage.refresh": {
@@ -1074,7 +1080,8 @@ export function createWsRouter({
           return
         }
         case "settings.writeAppSettingsPatch": {
-          const snapshot = await appSettings.writePatch(command.patch)
+          await appSettings.writePatch(command.patch)
+          const snapshot = getAppSettingsSnapshot()
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           return
         }

@@ -11,10 +11,12 @@ import type {
   ProviderModelOption,
   ServiceTier,
 } from "../shared/types"
+import type { CodexModelSummary } from "./codex-app-server-protocol"
 import {
   CLAUDE_CONTEXT_WINDOW_OPTIONS,
   DEFAULT_CLAUDE_MODEL_OPTIONS,
   DEFAULT_CURSOR_MODEL_OPTIONS,
+  CODEX_REASONING_OPTIONS,
   PROVIDERS,
   deriveModelLabel,
   withPiFaveModels,
@@ -163,6 +165,71 @@ export function applyPiFaveModels(faveModels: ReadonlyArray<FaveModel>): boolean
   return true
 }
 
+/**
+ * Replace Codex's static fallback with the signed-in account's app-server
+ * catalog. A non-empty list is authoritative, including its recommended
+ * default; an empty list leaves the fallback untouched.
+ */
+export function applyCodexModels(models: ReadonlyArray<CodexModelSummary>): boolean {
+  const codexIndex = SERVER_PROVIDERS.findIndex((provider) => provider.id === "codex")
+  const codexProvider = SERVER_PROVIDERS[codexIndex]
+  if (!codexProvider) return false
+
+  const staticModels = PROVIDERS.find((provider) => provider.id === "codex")?.models ?? []
+  const visibleModels = models.filter((model) => !model.hidden)
+  if (visibleModels.length === 0) return false
+
+  const nextModels: ProviderModelOption[] = visibleModels.flatMap((model) => {
+    const id = model.model.trim() || model.id.trim()
+    if (!id) return []
+
+    const staticOption = staticModels.find((option) => option.id === id || option.aliases?.includes(id))
+    const supportedReasoningEfforts = model.supportedReasoningEfforts.flatMap(({ reasoningEffort, description }) => {
+      if (!isCodexReasoningEffort(reasoningEffort)) return []
+      const known = CODEX_REASONING_OPTIONS.find((option) => option.id === reasoningEffort)
+      return [{
+        ...(known ?? { id: reasoningEffort, label: reasoningEffort }),
+        ...(description ? { description } : {}),
+      }]
+    })
+    const advertisedFastTier = model.serviceTiers?.some((tier) => tier.id === "priority" || tier.id === "fast")
+      || model.additionalSpeedTiers?.includes("fast") === true
+    const defaultReasoningEffort = isCodexReasoningEffort(model.defaultReasoningEffort)
+      ? model.defaultReasoningEffort
+      : staticOption?.defaultReasoningEffort
+
+    return [{
+      id,
+      label: model.displayName.trim() || staticOption?.label || deriveModelLabel(id),
+      supportsEffort: supportedReasoningEfforts.length > 0,
+      ...(supportedReasoningEfforts.length > 0 ? { supportedReasoningEfforts } : {}),
+      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+      supportsFastMode: advertisedFastTier,
+    }]
+  })
+  if (nextModels.length === 0) return false
+
+  const advertisedDefault = visibleModels.find((model) => model.isDefault)
+  const advertisedDefaultId = advertisedDefault?.model.trim() || advertisedDefault?.id.trim()
+  const defaultModel = nextModels.some((model) => model.id === advertisedDefaultId)
+    ? advertisedDefaultId!
+    : nextModels[0]!.id
+
+  if (
+    defaultModel === codexProvider.defaultModel
+    && JSON.stringify(nextModels) === JSON.stringify(codexProvider.models)
+  ) {
+    return false
+  }
+
+  SERVER_PROVIDERS.splice(codexIndex, 1, {
+    ...codexProvider,
+    defaultModel,
+    models: nextModels,
+  })
+  return true
+}
+
 export interface CursorCliModelInfo {
   id: string
   label: string
@@ -281,16 +348,18 @@ export function normalizeCodexModelOptions(
   model: string,
   modelOptions?: ModelOptions,
   legacyEffort?: string,
+  modelOption?: ProviderModelOption,
 ): CodexModelOptions {
   const reasoningEffort = modelOptions?.codex?.reasoningEffort
   return {
     reasoningEffort: normalizeCodexReasoningEffort(
       model,
       isCodexReasoningEffort(reasoningEffort) ? reasoningEffort : legacyEffort,
+      modelOption,
     ),
     // Spawn-time gating: fast mode only reaches models that support it
-    // (per Codex docs: GPT-5.6/5.5/5.4 — not 5.3 Codex or Spark).
-    fastMode: supportsProviderFastMode("codex", model) && modelOptions?.codex?.fastMode === true,
+    // according to the selected model's live or fallback catalog metadata.
+    fastMode: (modelOption?.supportsFastMode ?? supportsProviderFastMode("codex", model)) && modelOptions?.codex?.fastMode === true,
     ...(modelOptions?.codex?.accessMode === "approval" || modelOptions?.codex?.accessMode === "approve-for-me" || modelOptions?.codex?.accessMode === "full-access"
       ? { accessMode: modelOptions.codex.accessMode }
       : {}),
